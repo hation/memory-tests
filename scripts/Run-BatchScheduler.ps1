@@ -147,4 +147,47 @@ if ($allRows.Count -gt 0) {
     Write-Host "（未汇总到任何逐根报告——可能为 DryRun 或批次未产出报告）"
 }
 
+# 输出批次级汇总文本 all-batches-summary.txt（UTF-8 BOM；无逐根报告则跳过）
+if ($allRows.Count -gt 0) {
+    $sumTxt = Join-Path $LogPath ("all-batches-summary-{0}.txt" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+
+    # 对 all-batches-report 的 Result 列做 PASS / FAIL / INCOMPLETE / 未测 计数
+    $countPass = 0; $countFail = 0; $countIncomplete = 0; $countUntested = 0; $countOther = 0
+    foreach ($g in ($allRows | Group-Object Result)) {
+        switch ($g.Name) {
+            'PASS'       { $countPass = $g.Count }
+            'FAIL'       { $countFail = $g.Count }
+            'INCOMPLETE' { $countIncomplete = $g.Count }
+            '未测'        { $countUntested = $g.Count }
+            default      { $countOther += $g.Count }
+        }
+    }
+
+    # 起始/结束时间与总耗时（数据即上述 batch-summary.csv 的 $summary）
+    $firstStart = [datetime]::ParseExact($summary[0].Start, "yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+    $lastEnd    = [datetime]::ParseExact($summary[$summary.Count - 1].End, "yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+    $elapsed    = $lastEnd - $firstStart
+
+    $lines = @(
+        "===== DDR5 内存条 SOL 验收 · 批次汇总 =====",
+        ("生成时间: {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")),
+        ("批次总数: {0}" -f $summary.Count),
+        ("逐根总数: {0}" -f $allRows.Count),
+        "",
+        "结果统计（all-batches-report Result 列）:",
+        ("  PASS:        {0}" -f $countPass),
+        ("  FAIL:        {0}" -f $countFail),
+        ("  INCOMPLETE:  {0}" -f $countIncomplete),
+        ("  未测:        {0}" -f $countUntested),
+        ("  其他:        {0}" -f $countOther),
+        "",
+        ("时间区间: {0} ~ {1}" -f $summary[0].Start, $summary[$summary.Count - 1].End),
+        ("总耗时: {0} 小时 {1} 分 {2} 秒" -f [math]::Floor($elapsed.TotalHours), $elapsed.Minutes, $elapsed.Seconds)
+    )
+    $lines | Out-File -FilePath $sumTxt -Encoding UTF8
+    Write-Host "批次汇总文本 -> $sumTxt"
+} else {
+    Write-Host "（跳过 all-batches-summary.txt：无逐根报告）"
+}
+
 if ($failed -gt 0) { exit 1 }

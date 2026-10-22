@@ -405,6 +405,7 @@ if ($ParseOnly) {
 }
 
 Write-Host "===== Memtest86+ 编排开始（批次: $BatchName，方式: $BootMethod）====="
+Write-Event -Type stage -Data @{stage='orchestrator'; status='start'; batch=$BatchName; method=$BootMethod}
 
 # FR-1 识别建档
 $inventory = Get-MemoryInventory -ExpectedCsv $ExpectedCsv -BatchName $BatchName
@@ -415,6 +416,7 @@ if ($inventory.Count -eq 0) {
 $invFile = Join-Path $LogPath "$BatchName-inventory.csv"
 $inventory | Export-Csv -Path $invFile -NoTypeInformation -Encoding UTF8
 Write-Host "识别完成: $($inventory.Count) 根，清单 -> $invFile"
+Write-Event -Type entity -Data @{stage='inventory'; count=$inventory.Count; batch=$BatchName}
 $inventory | Format-Table Slot, SerialNumber, PartNumber, CapacityGB, SpeedMTs, MemType, Status -AutoSize
 
 # 按引导方式捕获 Memtest86+ 日志
@@ -442,6 +444,9 @@ switch ($BootMethod) {
     }
 }
 
+# 捕获完成（switch 各方式执行后、解析前）
+Write-Event -Type stage -Data @{stage='capture'; status='done'; method=$BootMethod; batch=$BatchName}
+
 # 解析 + 汇总（FR-10：Ctrl+C/异常时 finally 保护已解析结果）
 try {
     # 解析
@@ -458,6 +463,7 @@ try {
 
     Write-Host ""
     Write-Host ("Memtest86+ 结果: 轮次=$($summary.PassesCompleted) 错误=$($summary.Errors) ECC=$($summary.EccErrors) 状态=$($summary.FinalStatus)")
+    Write-Event -Type stage -Data @{stage='parse'; status='done'; passes=$summary.PassesCompleted; errors=$summary.Errors; result=$summary.FinalStatus}
     if ($summary.ErrorDetails.Count -gt 0) {
         Write-Host "错误明细:"
         $summary.ErrorDetails | ForEach-Object { Write-Host ("  [{0}] {1}" -f $_.Type, (($_.Fields | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join " ")) }
@@ -495,6 +501,7 @@ try {
     # FR-6 汇总报告
     Export-TestReport -BatchName $BatchName -Inventory $inventory -MemtestSummary $summary `
         -ReportDir $reportDir -LogPath $LogPath
+    Write-Event -Type done -Data @{stage='report'; file=(Join-Path $reportDir "$BatchName-report.csv"); batch=$BatchName}
 } finally {
     Write-Host ""
     Write-Host "（已保留本批次已解析数据；可用 -ParseOnly -LogFile <raw log> 断点续解析）"
