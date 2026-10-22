@@ -31,6 +31,11 @@ $ErrorActionPreference = 'Stop'
 # 共享库（识别/解析等公共逻辑，入库后统一抽取到 lib_common.ps1）
 . $PSScriptRoot\lib_common.ps1
 
+# 管道密码优先：脚本顶层 $input 可读外部管道（Read-BmcPass 的函数作用域内读不到，故在此先消费，
+# 否则 -File 模式管道场景会落入 Read-Host 等待控制台而挂起）。本脚本无 -BmcPass 参数，用 -not 判空（$null/"" 均算空）。
+$pipeIn = @($input)
+if (-not $BmcPass -and $pipeIn.Count -gt 0) { $BmcPass = [string]$pipeIn[0] }
+
 if ($Help) {
     Write-Host @"
 批量批次调度器
@@ -63,6 +68,13 @@ if (-not (Test-Path $LogPath)) { New-Item -ItemType Directory -Path $LogPath -Fo
 
 $batches = Read-CsvManifest -Path $ManifestCsv
 if ($batches.Count -eq 0) { Write-Error "批次清单为空"; exit 1 }
+
+# 密码：批次中存在需 BMC 密码的行（BmcHost 非空且 BmcPass 为空）→ 单次提示（管道/交互），统一赋给所有缺密行
+$needPw = @($batches | Where-Object { $_.BmcHost -and -not $_.BmcPass })
+if ($needPw.Count -gt 0) {
+    $pw = Read-BmcPass -Pass $BmcPass -Prompt "BMC 密码（$($needPw[0].BmcHost) 等 $($needPw.Count) 行）"
+    foreach ($r in $needPw) { $r.BmcPass = $pw }
+}
 
 $summary = @()
 $allRows = @()

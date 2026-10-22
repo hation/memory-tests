@@ -22,6 +22,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# 共享库（Read-BmcPass 等公共逻辑）
+. $PSScriptRoot\lib_common.ps1
+
+# 管道密码优先：脚本顶层 $input 可读外部管道（Read-BmcPass 的函数作用域内读不到，故在此先消费，
+# 否则 -File 模式管道场景会落入 Read-Host 等待控制台而挂起）。
+$pipeIn = @($input)
+if ($BmcPass -eq "" -and $pipeIn.Count -gt 0) { $BmcPass = [string]$pipeIn[0] }
+
 if ($Help) {
     Write-Host @"
 服务器测试能力一键评估
@@ -51,6 +59,9 @@ if ($MachineName -eq "") {
 }
 
 Write-Host "===== 服务器测试能力一键评估：$MachineName ====="
+
+# 密码：指定 BMC 且未显式提供 → 管道/交互提示一次（置于 $CapScript 调用之前）
+if ($BmcHost -and -not $BmcPass) { $BmcPass = Read-BmcPass -Prompt "BMC 密码（$BmcHost）" }
 
 # ---- 调用能力探测脚本（-OutCsv 落盘结构化结果） ----
 $capCsv = Join-Path $env:TEMP ("cap_" + [guid]::NewGuid().ToString("N") + ".csv")

@@ -119,6 +119,13 @@ Memtest86+ 自动化编排与压测报告汇总工具
     exit 0
 }
 
+# 管道密码优先：脚本顶层 $input 可读外部管道（Read-BmcPass 的函数作用域内读不到，故在此先消费，
+# 否则 -File 模式管道场景会落入 Read-Host 等待控制台而挂起）。
+$pipeIn = @($input)
+if ($BmcPass -eq "" -and $pipeIn.Count -gt 0) { $BmcPass = [string]$pipeIn[0] }
+# 密码：仅 SOL 方式（指定 BMC、未显式提供、非 ParseOnly）→ 管道/交互提示一次（初始化段、任何 BMC 调用前）
+if ($BootMethod -eq 'SOL' -and $BmcHost -and -not $BmcPass -and -not $ParseOnly) { $BmcPass = Read-BmcPass -Prompt "BMC 密码（$BmcHost）" }
+
 if ($LogPath -eq "") { $LogPath = Join-Path (Split-Path -Parent $PSScriptRoot) "results" }
 $rawDir   = Join-Path $LogPath "raw"
 $reportDir = Join-Path $LogPath "reports"
