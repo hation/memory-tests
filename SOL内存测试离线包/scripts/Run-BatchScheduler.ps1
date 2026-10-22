@@ -87,7 +87,9 @@ for ($i = 0; $i -lt $batches.Count; $i++) {
     if ($b.LogPath) { $runArgs['LogPath'] = $b.LogPath }
 
     $cmd = "& '$SuiteScript' " + (($runArgs.GetEnumerator() | ForEach-Object { "-$($_.Key) $($_.Value)" }) -join ' ')
-    Write-Host ("[{0}/{1}] {2}" -f ($i + 1), $batches.Count, $cmd)
+    # 展示命令时脱敏 BmcPass，避免密码明文落日志/终端
+    $cmdDisplay = $cmd -replace "(?i)(-BmcPass\s+)\S+", '${1}***'
+    Write-Host ("[{0}/{1}] {2}" -f ($i + 1), $batches.Count, $cmdDisplay)
 
     if ($DryRun) { continue }
 
@@ -155,23 +157,34 @@ if ($allRows.Count -gt 0) {
     $countPass = 0; $countFail = 0; $countIncomplete = 0; $countUntested = 0; $countOther = 0
     foreach ($g in ($allRows | Group-Object Result)) {
         switch ($g.Name) {
-            'PASS'       { $countPass = $g.Count }
-            'FAIL'       { $countFail = $g.Count }
-            'INCOMPLETE' { $countIncomplete = $g.Count }
-            '未测'        { $countUntested = $g.Count }
+            'PASS'       { $countPass += $g.Count }
+            'FAIL'       { $countFail += $g.Count }
+            'INCOMPLETE' { $countIncomplete += $g.Count }
+            '未测'        { $countUntested += $g.Count }
             default      { $countOther += $g.Count }
         }
     }
 
-    # 起始/结束时间与总耗时（数据即上述 batch-summary.csv 的 $summary）
-    $firstStart = [datetime]::ParseExact($summary[0].Start, "yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
-    $lastEnd    = [datetime]::ParseExact($summary[$summary.Count - 1].End, "yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
-    $elapsed    = $lastEnd - $firstStart
+    # 批次执行口径（OK=成功、FAIL=失败）
+    $batchOk = ($summary | Where-Object Status -eq 'OK').Count
+    $batchFail = ($summary | Where-Object Status -eq 'FAIL').Count
+
+    # 起始/结束时间与总耗时（ParseExact 失败时降级为未知，避免崩溃）
+    $firstStart = "未知"; $lastEnd = "未知"; $elapsed = [TimeSpan]::Zero
+    if ($summary.Count -gt 0) {
+        try {
+            $firstStart = [datetime]::ParseExact($summary[0].Start, "yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+            $lastEnd    = [datetime]::ParseExact($summary[$summary.Count - 1].End, "yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+            $elapsed    = $lastEnd - $firstStart
+        } catch {
+            $firstStart = $summary[0].Start; $lastEnd = $summary[$summary.Count - 1].End
+        }
+    }
 
     $lines = @(
         "===== DDR5 内存条 SOL 验收 · 批次汇总 =====",
         ("生成时间: {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")),
-        ("批次总数: {0}" -f $summary.Count),
+        ("批次总数: {0}（成功 {1} / 失败 {2}）" -f $summary.Count, $batchOk, $batchFail),
         ("逐根总数: {0}" -f $allRows.Count),
         "",
         "结果统计（all-batches-report Result 列）:",
@@ -181,7 +194,7 @@ if ($allRows.Count -gt 0) {
         ("  未测:        {0}" -f $countUntested),
         ("  其他:        {0}" -f $countOther),
         "",
-        ("时间区间: {0} ~ {1}" -f $summary[0].Start, $summary[$summary.Count - 1].End),
+        ("时间区间: {0} ~ {1}" -f $firstStart, $lastEnd),
         ("总耗时: {0} 小时 {1} 分 {2} 秒" -f [math]::Floor($elapsed.TotalHours), $elapsed.Minutes, $elapsed.Seconds)
     )
     $lines | Out-File -FilePath $sumTxt -Encoding UTF8

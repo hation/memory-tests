@@ -32,14 +32,7 @@ if (-not (Test-Path $outDir)) {
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 if ($BatchName -eq "") { $BatchName = "batch_$stamp" }
 
-# ---------- 读取预期清单（若提供） ----------
-$expected = @()
-if ($ExpectedCsv -ne "" -and (Test-Path $ExpectedCsv)) {
-    $expected = Import-Csv -Path $ExpectedCsv
-    Write-Host "已加载预期清单: $ExpectedCsv（$($expected.Count) 条）"
-}
-
-# ---------- 采集所有内存槽信息（复用共享库 Get-MemoryInventory） ----------
+# ---------- 采集所有内存槽信息（复用共享库 Get-MemoryInventory；预期清单由库内单次加载匹配） ----------
 $inventory = @(Get-MemoryInventory -ExpectedCsv $ExpectedCsv -BatchName $BatchName)
 if ($inventory.Count -eq 0) {
     Write-Host "未读取到任何内存信息，请确认内存条已安装且系统正常。"

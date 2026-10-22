@@ -112,12 +112,18 @@ def upsert_batch(conn: sqlite3.Connection, machine: str, batch: str) -> int:
         (machine, batch)).fetchone()[0]
 
 
+# 允许写入的列白名单：动态列名拼 SQL 仅接受内部固定字段，杜绝外部键注入
+_ENTITY_COLS = frozenset({'capacity_gb', 'part_number', 'manufacturer'})
+_RUN_COLS = frozenset({'result', 'errors', 'ecc_errors', 'passes', 'test_date'})
+
+
 def upsert_entity(conn: sqlite3.Connection, serial: str, fields: dict) -> int:
     """幂等写入实体：ON CONFLICT(serial) DO UPDATE（仅合并 fields 中非空值），返回 id。
 
-    fields 可含 capacity_gb / part_number / manufacturer。
+    fields 可含 capacity_gb / part_number / manufacturer；未知键被忽略。
     """
-    cols = {k: v for k, v in fields.items() if v not in (None, '')}
+    cols = {k: v for k, v in fields.items()
+            if k in _ENTITY_COLS and v not in (None, '')}
     if cols:
         sets = ', '.join('%s=excluded.%s' % (k, k) for k in cols)
         conn.execute(
@@ -137,9 +143,9 @@ def upsert_entity(conn: sqlite3.Connection, serial: str, fields: dict) -> int:
 def insert_run(conn: sqlite3.Connection, batch_id: int, entity_id: int, **fields) -> int:
     """幂等写入测试记录：ON CONFLICT(batch_id, entity_id) DO UPDATE SET fields，返回 id。
 
-    fields 可含 result / errors / ecc_errors / passes / test_date。
+    fields 可含 result / errors / ecc_errors / passes / test_date；未知键被忽略。
     """
-    cols = list(fields)
+    cols = [k for k in fields if k in _RUN_COLS]
     if not cols:
         # 无字段也确保记录存在（幂等，INSERT OR IGNORE）
         conn.execute(
@@ -152,7 +158,7 @@ def insert_run(conn: sqlite3.Connection, batch_id: int, entity_id: int, **fields
             'INSERT INTO runs(batch_id, entity_id, %s) VALUES(?, ?, %s) '
             'ON CONFLICT(batch_id, entity_id) DO UPDATE SET %s' % (
                 ', '.join(cols), placeholders, sets),
-            [batch_id, entity_id] + list(fields.values()))
+            [batch_id, entity_id] + [fields[k] for k in cols])
     return conn.execute(
         'SELECT id FROM runs WHERE batch_id=? AND entity_id=?',
         (batch_id, entity_id)).fetchone()[0]
