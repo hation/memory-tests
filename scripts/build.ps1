@@ -75,9 +75,10 @@ $verLine = "> 工具版本：$ver"
 [System.IO.File]::WriteAllText((Join-Path $KitDir 'VERSION'), $ver, $utf8NoBom)
 
 # KitDir\README.md：幂等注入版本行（已存在该行则先删除再插入到文件开头）
+# 内容层幂等：TrimEnd 去除末尾换行/空行，避免 -split 产生尾随空元素在尾部累积空行
 $readmePath = Join-Path $KitDir 'README.md'
 if (Test-Path -LiteralPath $readmePath) {
-    $raw = [System.IO.File]::ReadAllText($readmePath, $utf8NoBom)
+    $raw = [System.IO.File]::ReadAllText($readmePath, $utf8NoBom).TrimEnd("`r", "`n")
     $lines = $raw -split "`r?`n"
     $filtered = @($lines | Where-Object { $_ -ne $verLine })
     $sb = New-Object System.Text.StringBuilder
