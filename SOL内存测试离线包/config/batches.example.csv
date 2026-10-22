@@ -1,0 +1,3 @@
+BatchName,BootMethod,BmcHost,BmcUser,BmcPass,UsbDrive,EfiImage,SerialPort,BaudRate,MaxPasses,TestList,ExpectedCsv,MonitorEcc,MonitorTemp,RestartLoop,ConfirmSwitch,LogPath
+batch01,SOL,192.168.1.10,admin,password,,,,,115200,4,,expected.csv,yes,yes,0,yes,
+batch02,SOL,192.168.1.11,admin,password,,,,,115200,4,"0,1,2,3",,no,no,2,yes,

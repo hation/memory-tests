@@ -1,0 +1,8 @@
+# 测试输出（运行产物，不入库）
+memory_results/
+output/
+
+# Windows 临时文件
+Thumbs.db
+Desktop.ini
+*.log
