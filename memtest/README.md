@@ -78,12 +78,12 @@ memtest/
 ### 第 2 步：单批 SOL 全自动验收
 
 ```powershell
-cd scripts
+# 在包根目录运行（推荐 C:\memtest\）
 # 原格式（通用）
-.\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
+.\scripts\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
   -BmcHost 192.168.1.10 -BmcUser admin -BmcPass pwd -MaxPasses 4 -ConfirmSwitch
 # 👉 本机版（复制即用，密码运行中提示）
-.\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
+.\scripts\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
   -BmcHost 10.0.0.10 -BmcUser root -MaxPasses 4 -ConfirmSwitch
 # 可选：-MonitorEcc -MonitorTemp -RestartLoop 2
 ```

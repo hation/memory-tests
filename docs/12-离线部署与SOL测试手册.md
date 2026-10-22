@@ -55,14 +55,14 @@
 # ② 放开脚本执行限制（只需设置一次，永久生效；以后新窗口不用再设）
 Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
 
-# ③ 进入工具目录
-cd C:\memtest\scripts
+# ③ 进入工具根目录（固定部署目录）
+cd C:\memtest
 
 # ④ 环境自检：首行"工具版本: vN"应与交付包版本一致；确认脚本/ipmitool/ISO 齐全
-.\check_env.ps1
+.\scripts\check_env.ps1
 
 # ⑤ 预览一次（可选）：确认编排器参数
-.\Run-MemtestSuite.ps1 -Help
+.\scripts\Run-MemtestSuite.ps1 -Help
 ```
 
 > **版本核对**：交付 zip 固定名 `memtest.zip`，版本看**包内**：解压后 `VERSION` 文件或 `README.md` 首行 `> 工具版本: vN`；与 `check_env.ps1` 首行 `工具版本: vN` **不一致 = 没拷到最新**，按 1.6 更新。
@@ -93,9 +93,9 @@ C:\memtest\results\
 # ② 删除旧 scripts（全量替换，不要单文件覆盖）
 Remove-Item C:\memtest\scripts -Recurse -Force
 # ③ 拷贝新离线包的 scripts 到 C:\memtest\
-# ④ 新开管理员 PowerShell，自检并核对版本号
-cd C:\memtest\scripts
-.\check_env.ps1        # 首行"工具版本: vN"应与发布版本一致
+# ④ 新开管理员 PowerShell，自检并核对版本号（在包根目录运行）
+cd C:\memtest
+.\scripts\check_env.ps1        # 首行"工具版本: vN"应与发布版本一致
 ```
 
 > 版本不一致 = 没拷到最新；一致 = 已是最新。运行日志开头也会打印版本号。
@@ -106,7 +106,7 @@ cd C:\memtest\scripts
 | --- | --- | --- |
 | 报"禁止运行脚本" | 执行策略限制 | 1.3 第②步 |
 | check_env 版本与交付包不符 | 没拷到最新 | 1.6 更新流程 |
-| 预览/识别看不到内存 | 脚本在错误目录运行 | 必须 `cd C:\memtest\scripts` |
+| 预览/识别看不到内存 | 脚本在错误目录运行 | 在包根运行：`cd C:\memtest`，命令用 `.\scripts\...` |
 | SOL 无输出 | BMC/BIOS 未配置 | 1.4 + 09 指南排查 |
 
 ---

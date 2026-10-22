@@ -2,10 +2,10 @@
 # Diag-Bmc.ps1 — BMC 一键诊断（四步：mc info / chassis status / sdr elist / sol activate）
 # 定位：`mc info` 连不上 BMC（能力评估 5/10 显示「需 BMC」）时的一键排查。
 # 依据：docs/15-BMC排查方案.md §2（诊断命令序列 + §2.3 三大原因对照表）。
-# 用法：
-#   .\Diag-Bmc.ps1 -BmcHost <BMC_IP> -BmcUser root -BmcPass <密码>   # 完整参数
-#   .\Diag-Bmc.ps1 -BmcHost <BMC_IP> -BmcUser root                    # 密码走管道/交互输入
-#   .\Diag-Bmc.ps1 -Help                                              # 打印用法即退
+# 用法（在离线包根目录运行，如 C:\memtest\）：
+#   .\scripts\Diag-Bmc.ps1 -BmcHost <BMC_IP> -BmcUser root -BmcPass <密码>   # 完整参数
+#   .\scripts\Diag-Bmc.ps1 -BmcHost <BMC_IP> -BmcUser root                    # 密码走管道/交互输入
+#   .\scripts\Diag-Bmc.ps1 -Help                                              # 打印用法即退
 # 依赖：lib_common.ps1（Invoke-IpmiProbe / Read-BmcPass）；内置 ipmitool 自动发现
 #       （<包根>\tools\ipmitool\ipmitool.exe，同 Check-ServerCapabilities）。
 # 输出：每步 [PASS]/[FAIL] + 末尾汇总表与三大原因提示；任一步失败以非 0 退出。
@@ -20,8 +20,8 @@ param(
 )
 
 if ($Help) {
-    Write-Host "Diag-Bmc.ps1 — BMC 一键诊断"
-    Write-Host "用法: .\Diag-Bmc.ps1 -BmcHost <BMC_IP> [-BmcUser root] [-BmcPass <密码>] [-IpmiTool <ipmitool路径>]"
+    Write-Host "Diag-Bmc.ps1 — BMC 一键诊断（在离线包根目录运行）"
+    Write-Host "用法: .\scripts\Diag-Bmc.ps1 -BmcHost <BMC_IP> [-BmcUser root] [-BmcPass <密码>] [-IpmiTool <ipmitool路径>]"
     Write-Host "四步: ① mc info(套件自动回退 -C 3/-C 17) ② chassis status ③ sdr elist(温度) ④ sol activate(短探测)"
     exit 0
 }

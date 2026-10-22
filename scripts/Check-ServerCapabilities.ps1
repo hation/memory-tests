@@ -9,10 +9,10 @@
 #     sol activate 短探测 → 决定项 5,10 与 SOL 通道可用性
 #   固定外包项（6,7,8,9,11,12,13,14）：与服务器无关，恒为外包
 #
-# 用法：
-#   .\Check-ServerCapabilities.ps1 -Local                    # 在服务器本机（Windows）跑
-#   .\Check-ServerCapabilities.ps1 -BmcHost <IP> -BmcUser <u> -BmcPass <p>   # 编排机远程探测
-#   .\Check-ServerCapabilities.ps1 -Local -BmcHost <IP> -BmcUser <u> -BmcPass <p> -OutCsv cap.csv
+# 用法（在离线包根目录运行，如 C:\memtest\）：
+#   .\scripts\Check-ServerCapabilities.ps1 -Local                    # 在服务器本机（Windows）跑
+#   .\scripts\Check-ServerCapabilities.ps1 -BmcHost <IP> -BmcUser <u> -BmcPass <p>   # 编排机远程探测
+#   .\scripts\Check-ServerCapabilities.ps1 -Local -BmcHost <IP> -BmcUser <u> -BmcPass <p> -OutCsv cap.csv
 # ============================================================================
 
 param(

@@ -2,10 +2,10 @@
 # Run-ServerAssessment.ps1 — 服务器测试能力一键评估
 # 自动串联「带内(CIM) + 带外(BMC/IPMI)」探测 → 输出 17 项可行性 + 每项建议动作。
 #
-# 用法：
-#   .\Run-ServerAssessment.ps1 -Local                                      # 本机（服务器已进 Windows）
-#   .\Run-ServerAssessment.ps1 -BmcHost <IP> -BmcUser <u> -BmcPass <p>    # 编排机远程
-#   .\Run-ServerAssessment.ps1 -Local -BmcHost <IP> -BmcUser <u> -BmcPass <p> -MachineName srv01
+# 用法（在离线包根目录运行，如 C:\memtest\）：
+#   .\scripts\Run-ServerAssessment.ps1 -Local                                      # 本机（服务器已进 Windows）
+#   .\scripts\Run-ServerAssessment.ps1 -BmcHost <IP> -BmcUser <u> -BmcPass <p>    # 编排机远程
+#   .\scripts\Run-ServerAssessment.ps1 -Local -BmcHost <IP> -BmcUser <u> -BmcPass <p> -MachineName srv01
 # ============================================================================
 
 param(
@@ -35,10 +35,10 @@ if ($Help) {
 服务器测试能力一键评估
 -----------------------
 自动串联带内(CIM)+带外(BMC/IPMI)探测，输出 17 项可行性 + 每项建议动作。
-用法：
-  .\Run-ServerAssessment.ps1 -Local
-  .\Run-ServerAssessment.ps1 -BmcHost <IP> -BmcUser <u> -BmcPass <p>
-  .\Run-ServerAssessment.ps1 -Local -BmcHost <IP> -BmcUser <u> -BmcPass <p> -MachineName srv01 -OutDir out
+用法（在离线包根目录运行，如 C:\memtest\）：
+  .\scripts\Run-ServerAssessment.ps1 -Local
+  .\scripts\Run-ServerAssessment.ps1 -BmcHost <IP> -BmcUser <u> -BmcPass <p>
+  .\scripts\Run-ServerAssessment.ps1 -Local -BmcHost <IP> -BmcUser <u> -BmcPass <p> -MachineName srv01 -OutDir out
 参数：
   -Local/-BmcHost/-BmcUser/-BmcPass  同 Check-ServerCapabilities.ps1
   -MachineName  报告命名（缺省：本机名 或 BMC IP）

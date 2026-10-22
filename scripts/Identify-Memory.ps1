@@ -3,9 +3,9 @@
 # 用途：智能识别当前电脑所有内存槽位上的 DDR5 内存条，自动采集 SPD 信息并分类，
 #       输出带时间戳的批次清单 CSV（<包根>\results\<批次>.csv），供批量验收使用。
 #
-# 用法：
-#   .\Identify-Memory.ps1 -BatchName "batch01"
-#   .\Identify-Memory.ps1 -ExpectedCsv "C:\path\expected.csv" -BatchName "batch01"
+# 用法（在离线包根目录运行，如 C:\memtest\）：
+#   .\scripts\Identify-Memory.ps1 -BatchName "batch01"
+#   .\scripts\Identify-Memory.ps1 -ExpectedCsv "C:\path\expected.csv" -BatchName "batch01"
 #
 # 参数：
 #   -ExpectedCsv  可选。预期清单 CSV 路径，需包含 SerialNumber 列；

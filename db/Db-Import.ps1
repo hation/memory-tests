@@ -1,11 +1,11 @@
 ﻿# db/Db-Import.ps1 — 报告 CSV 导入 SQLite 历史库封装（自动用包内 python）
-# 用法: .\Db-Import.ps1 <report.csv> [--db history.db] [--machine <name>]
+# 用法（在离线包根目录运行）: .\db\Db-Import.ps1 <report.csv> [--db history.db] [--machine <name>]
 param(
     [switch]$Help,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$Args
 )
 if ($Help) {
-    Write-Host "用法: .\Db-Import.ps1 <report.csv> [--db history.db] [--machine <name>]"
+    Write-Host "用法: .\db\Db-Import.ps1 <report.csv> [--db history.db] [--machine <name>]"
     exit 0
 }
 . (Join-Path $PSScriptRoot "..\scripts\lib_common.ps1")

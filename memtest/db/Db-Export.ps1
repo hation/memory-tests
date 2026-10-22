@@ -1,11 +1,11 @@
 ﻿# db/Db-Export.ps1 — 导出历史库全量 CSV 封装（自动用包内 python）
-# 用法: .\Db-Export.ps1 --db history.db --out <path>
+# 用法（在离线包根目录运行）: .\db\Db-Export.ps1 --db history.db --out <path>
 param(
     [switch]$Help,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$Args
 )
 if ($Help) {
-    Write-Host "用法: .\Db-Export.ps1 --db history.db --out <path>"
+    Write-Host "用法: .\db\Db-Export.ps1 --db history.db --out <path>"
     exit 0
 }
 . (Join-Path $PSScriptRoot "..\scripts\lib_common.ps1")

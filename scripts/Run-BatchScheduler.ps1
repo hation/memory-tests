@@ -2,10 +2,10 @@
 # Run-BatchScheduler.ps1
 # 批量批次调度器：读批次清单 CSV，逐批调用 Run-MemtestSuite.ps1，汇总全部结果。
 #
-# 用法示例：
-#   .\Run-BatchScheduler.ps1 -ManifestCsv .\batches.csv
-#   .\Run-BatchScheduler.ps1 -ManifestCsv .\batches.csv -DryRun
-#   .\Run-BatchScheduler.ps1 -ManifestCsv .\batches.csv -ContinueOnError
+# 用法示例（在离线包根目录运行，如 C:\memtest\）：
+#   .\scripts\Run-BatchScheduler.ps1 -ManifestCsv .\config\batches.csv
+#   .\scripts\Run-BatchScheduler.ps1 -ManifestCsv .\config\batches.csv -DryRun
+#   .\scripts\Run-BatchScheduler.ps1 -ManifestCsv .\config\batches.csv -ContinueOnError
 #
 # 批次清单 CSV 列：
 #   BatchName, BootMethod, BmcHost, BmcUser, BmcPass, UsbDrive, EfiImage,

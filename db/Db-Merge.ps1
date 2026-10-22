@@ -1,11 +1,11 @@
 ﻿# db/Db-Merge.ps1 — 历史库幂等合并封装（自动用包内 python）
-# 用法: .\Db-Merge.ps1 --db1 <path> --db2 <path> --out <path>
+# 用法（在离线包根目录运行）: .\db\Db-Merge.ps1 --db1 <path> --db2 <path> --out <path>
 param(
     [switch]$Help,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$Args
 )
 if ($Help) {
-    Write-Host "用法: .\Db-Merge.ps1 --db1 <path> --db2 <path> --out <path>"
+    Write-Host "用法: .\db\Db-Merge.ps1 --db1 <path> --db2 <path> --out <path>"
     exit 0
 }
 . (Join-Path $PSScriptRoot "..\scripts\lib_common.ps1")
