@@ -8,7 +8,8 @@
 param(
     [string]$KitDir = '',
     [switch]$Bump,    # 递增版本号后构建（每次打包用）
-    [switch]$Zip      # 构建后压缩成交付 zip（以版本命名）
+    [switch]$Zip,     # 构建后压缩成交付 zip（以版本命名）
+    [string]$PythonSrc = ''   # 可选：python 源目录（默认探测 disk-tests\deploy\bin\python）
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,7 +69,8 @@ $scriptFiles = @(
     'Run-MemtestSuite.ps1',
     'Check-ServerCapabilities.ps1',
     'Run-ServerAssessment.ps1',
-    'check_env.ps1'
+    'check_env.ps1',
+    'Diag-Bmc.ps1'
 )
 Sync-Dir -Src $scriptSrc -Dst $scriptDst -Exclude @('build.ps1')
 foreach ($f in $scriptFiles) {
@@ -89,6 +91,24 @@ foreach ($d in @('boot', 'config', 'tools', 'conf')) {
     if (Test-Path -LiteralPath $src) {
         New-Item -ItemType Directory -Path $dst -Force | Out-Null
         Copy-Item -Path (Join-Path $src '*') -Destination $dst -Recurse -Force
+    }
+}
+
+# 内置 python：kit 缺失时从源补拷（源默认 disk-tests 便携版，gitignored 不入库）
+$kitPy = Join-Path $KitDir 'tools\python\python.exe'
+if (-not (Test-Path -LiteralPath $kitPy)) {
+    $src = $PythonSrc
+    if (-not $src) {
+        $defSrc = Join-Path $Repo '..\disk-tests\deploy\bin\python'
+        if (Test-Path -LiteralPath $defSrc) { $src = (Resolve-Path -LiteralPath $defSrc).Path }
+    }
+    if ($src -and (Test-Path -LiteralPath (Join-Path $src 'python.exe'))) {
+        $dst = Split-Path -Parent $kitPy
+        New-Item -ItemType Directory -Path $dst -Force | Out-Null
+        Copy-Item -Path (Join-Path $src '*') -Destination $dst -Recurse -Force
+        Write-Host "==> 内置 Python 已拷入 kit（$src）"
+    } else {
+        Write-Host "==> 警告：kit 未内置 Python，db 历史库将回退系统 python"
     }
 }
 
@@ -173,6 +193,10 @@ if (Test-Path -LiteralPath (Join-Path $KitDir 'db')) {
     Get-ChildItem -LiteralPath (Join-Path $KitDir 'db') -File | ForEach-Object {
         $keyFiles += $_.FullName
     }
+}
+$kitPyDir = Join-Path $KitDir 'tools\python'
+if (Test-Path -LiteralPath $kitPyDir) {
+    Get-ChildItem -LiteralPath $kitPyDir -File | ForEach-Object { $keyFiles += $_.FullName }
 }
 
 $lines = foreach ($f in $keyFiles) {
