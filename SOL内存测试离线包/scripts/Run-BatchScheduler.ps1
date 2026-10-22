@@ -28,6 +28,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# 共享库（识别/解析等公共逻辑，入库后统一抽取到 lib_common.ps1）
+. $PSScriptRoot\lib_common.ps1
+
 if ($Help) {
     Write-Host @"
 批量批次调度器
@@ -56,35 +59,9 @@ if (-not (Test-Path $SuiteScript)) { Write-Error "编排脚本不存在: $SuiteS
 if ($LogPath -eq "") { $LogPath = Join-Path $PSScriptRoot "memory_results" }
 if (-not (Test-Path $LogPath)) { New-Item -ItemType Directory -Path $LogPath -Force | Out-Null }
 
-# 健壮 CSV 读取：用 .NET TextFieldParser，正确处理带引号的逗号、且保留行尾空字段
-# （PS 5.1 的 Import-Csv 会丢弃行尾逗号的空字段，导致列错位）
-function Read-ManifestRows {
-    param([string]$Path)
+# 健壮 CSV 读取已上移共享库（Read-CsvManifest，.NET TextFieldParser，保留行尾空字段）
 
-    Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction SilentlyContinue
-    $parser = New-Object Microsoft.VisualBasic.FileIO.TextFieldParser($Path)
-    $parser.TextFieldType = 'Delimited'
-    $parser.SetDelimiters(',')
-    $parser.HasFieldsEnclosedInQuotes = $true
-
-    try {
-        $headers = $parser.ReadFields() | ForEach-Object { $_.Trim() }
-        $rows = @()
-        while (-not $parser.EndOfData) {
-            $vals = $parser.ReadFields()
-            $obj = [ordered]@{}
-            for ($c = 0; $c -lt $headers.Count; $c++) {
-                $obj[$headers[$c]] = if ($c -lt $vals.Count) { $vals[$c].Trim() } else { "" }
-            }
-            $rows += [PSCustomObject]$obj
-        }
-    } finally {
-        $parser.Close()
-    }
-    return $rows
-}
-
-$batches = Read-ManifestRows -Path $ManifestCsv
+$batches = Read-CsvManifest -Path $ManifestCsv
 if ($batches.Count -eq 0) { Write-Error "批次清单为空"; exit 1 }
 
 $summary = @()
@@ -168,6 +145,49 @@ if ($allRows.Count -gt 0) {
     Write-Host "逐根汇总 -> $aggFile（$($allRows.Count) 条）"
 } else {
     Write-Host "（未汇总到任何逐根报告——可能为 DryRun 或批次未产出报告）"
+}
+
+# 输出批次级汇总文本 all-batches-summary.txt（UTF-8 BOM；无逐根报告则跳过）
+if ($allRows.Count -gt 0) {
+    $sumTxt = Join-Path $LogPath ("all-batches-summary-{0}.txt" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+
+    # 对 all-batches-report 的 Result 列做 PASS / FAIL / INCOMPLETE / 未测 计数
+    $countPass = 0; $countFail = 0; $countIncomplete = 0; $countUntested = 0; $countOther = 0
+    foreach ($g in ($allRows | Group-Object Result)) {
+        switch ($g.Name) {
+            'PASS'       { $countPass = $g.Count }
+            'FAIL'       { $countFail = $g.Count }
+            'INCOMPLETE' { $countIncomplete = $g.Count }
+            '未测'        { $countUntested = $g.Count }
+            default      { $countOther += $g.Count }
+        }
+    }
+
+    # 起始/结束时间与总耗时（数据即上述 batch-summary.csv 的 $summary）
+    $firstStart = [datetime]::ParseExact($summary[0].Start, "yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+    $lastEnd    = [datetime]::ParseExact($summary[$summary.Count - 1].End, "yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+    $elapsed    = $lastEnd - $firstStart
+
+    $lines = @(
+        "===== DDR5 内存条 SOL 验收 · 批次汇总 =====",
+        ("生成时间: {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")),
+        ("批次总数: {0}" -f $summary.Count),
+        ("逐根总数: {0}" -f $allRows.Count),
+        "",
+        "结果统计（all-batches-report Result 列）:",
+        ("  PASS:        {0}" -f $countPass),
+        ("  FAIL:        {0}" -f $countFail),
+        ("  INCOMPLETE:  {0}" -f $countIncomplete),
+        ("  未测:        {0}" -f $countUntested),
+        ("  其他:        {0}" -f $countOther),
+        "",
+        ("时间区间: {0} ~ {1}" -f $summary[0].Start, $summary[$summary.Count - 1].End),
+        ("总耗时: {0} 小时 {1} 分 {2} 秒" -f [math]::Floor($elapsed.TotalHours), $elapsed.Minutes, $elapsed.Seconds)
+    )
+    $lines | Out-File -FilePath $sumTxt -Encoding UTF8
+    Write-Host "批次汇总文本 -> $sumTxt"
+} else {
+    Write-Host "（跳过 all-batches-summary.txt：无逐根报告）"
 }
 
 if ($failed -gt 0) { exit 1 }

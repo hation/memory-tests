@@ -9,3 +9,10 @@ disk-tests/
 Thumbs.db
 Desktop.ini
 *.log
+
+# Python 字节码缓存（db/ 运行产物，不入库）
+__pycache__/
+*.py[cod]
+
+# SDD 工作区（git-ignored scratch）
+.superpowers/

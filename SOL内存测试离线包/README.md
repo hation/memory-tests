@@ -1,3 +1,4 @@
+> 工具版本：v1
 # SOL 内存测试离线包（Memtest86+ 全自动验收）
 
 基于 Windows PowerShell 的 **DDR5 内存条 SOL 全自动验收工具包**。编排器远程引导 Memtest86+、抓取 MTLOG 日志、解析并汇总成逐根可追溯的压测报告。

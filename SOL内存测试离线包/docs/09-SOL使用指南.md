@@ -1,7 +1,10 @@
 # Memtest86+ SOL 方式使用指南（Windows 编排器）
 
+> 状态：[当前有效]（2026-10-22）
+> 变更记录：2026-10-22 文档体系编号化（对齐 disk-tests）；工程基建优化更新
+
 > 适用：服务器批量内存验收场景，**全自动、无人值守**。SOL（Serial over LAN，串口网络化）让 Windows 编排器远程抓到 Memtest86+ 的机器可解析日志（MTLOG），跑完自动汇总报告。
-> 对应脚本：[Run-MemtestSuite.ps1](computer://c:\Users\ganxin01\Documents\trae-work\memory-tests\Run-MemtestSuite.ps1) 的 `-BootMethod SOL`。
+> 对应脚本：[Run-MemtestSuite.ps1](computer://c:\Users\ganxin01\Documents\trae-work\memory-tests\scripts\Run-MemtestSuite.ps1) 的 `-BootMethod SOL`。
 
 ---
 
@@ -83,11 +86,11 @@ Windows 编排器：ipmitool sol activate 抓流 → 写文件 → 解析 MTLOG
 
 ```powershell
 # 标准 SOL 全自动验收（4 轮）
-.\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
+.\scripts\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
   -BmcHost 192.168.1.10 -BmcUser admin -BmcPass pwd -MaxPasses 4 -ConfirmSwitch
 
 # 附加 ECC 监控 + 温度监控 + 测完断电循环 2 次
-.\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
+.\scripts\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
   -BmcHost 192.168.1.10 -BmcUser admin -BmcPass pwd -MaxPasses 4 `
   -MonitorEcc -MonitorTemp -RestartLoop 2 -ConfirmSwitch
 ```
@@ -152,7 +155,7 @@ ipmitool -I lanplus -H <BMC_IP> -U <user> -P <pass> sdr elist
 
 ## 8. 批量建议（1000 根）
 
-- **推荐 SOL + BMC 虚拟介质挂 ISO**：全自动无人值守，配合批次调度器 `Run-BatchScheduler.ps1` 逐批跑，最后出全量报告
+- **推荐 SOL + BMC 虚拟介质挂 ISO**：全自动无人值守，配合批次调度器 `scripts\Run-BatchScheduler.ps1` 逐批跑，最后出全量报告
 - 每批插满 8–16 根 → 1 轮快速筛选约 1–1.5 小时；4 轮完整验收约 3–6 小时
 - 多台服务器并行（各自独立的 BMC + 编排实例）可把总量压到 2–3 天
 - 断电循环/温度/ECC 监控都可在 SOL 方式下用 `-MonitorEcc -MonitorTemp -RestartLoop` 一并做

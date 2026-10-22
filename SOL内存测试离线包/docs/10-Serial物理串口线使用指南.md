@@ -1,7 +1,10 @@
 # Memtest86+ Serial 物理串口线方式使用指南（Windows 编排器）
 
+> 状态：[当前有效]（2026-10-22）
+> 变更记录：2026-10-22 文档体系编号化（对齐 disk-tests）；工程基建优化更新
+
 > 适用：**服务器完全不能联网、但想要无人值守全自动**的场景。用一根物理串口线（null-modem 交叉线）把服务器 COM 口连到 Windows 编排机，Memtest86+ 把机器可解析日志（MTLOG）打到串口，脚本自动读、自动汇总。零按键、零网络。
-> 对应脚本：[Run-MemtestSuite.ps1](computer://c:\Users\ganxin01\Documents\trae-work\memory-tests\Run-MemtestSuite.ps1) 的 `-BootMethod Serial`。
+> 对应脚本：[Run-MemtestSuite.ps1](computer://c:\Users\ganxin01\Documents\trae-work\memory-tests\scripts\Run-MemtestSuite.ps1) 的 `-BootMethod Serial`。
 
 ---
 
@@ -89,11 +92,11 @@ console=ttyS0,115200 log=ttyS0,115200 maxpasses=4
 
 ```powershell
 # 标准 Serial 全自动验收（4 轮）
-.\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod Serial `
+.\scripts\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod Serial `
   -SerialPort COM3 -BaudRate 115200 -MaxPasses 4
 
 # 更明确的串口 + 校验
-.\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod Serial `
+.\scripts\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod Serial `
   -SerialPort COM3 -BaudRate 115200 -MaxPasses 4 -ExpectedCsv expected.csv
 ```
 

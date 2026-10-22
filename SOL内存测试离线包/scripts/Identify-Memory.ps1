@@ -20,6 +20,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# 共享库（识别/解析等公共逻辑，入库后统一抽取到 lib_common.ps1）
+. $PSScriptRoot\lib_common.ps1
+
 # ---------- 输出目录 ----------
 $outDir = Join-Path $PSScriptRoot "memory_results"
 if (-not (Test-Path $outDir)) {
@@ -36,71 +39,19 @@ if ($ExpectedCsv -ne "" -and (Test-Path $ExpectedCsv)) {
     Write-Host "已加载预期清单: $ExpectedCsv（$($expected.Count) 条）"
 }
 
-# ---------- 采集所有内存槽信息 ----------
-$memSticks = Get-CimInstance -ClassName Win32_PhysicalMemory
-if (-not $memSticks) {
+# ---------- 采集所有内存槽信息（复用共享库 Get-MemoryInventory） ----------
+$inventory = @(Get-MemoryInventory -ExpectedCsv $ExpectedCsv -BatchName $BatchName)
+if ($inventory.Count -eq 0) {
     Write-Host "未读取到任何内存信息，请确认内存条已安装且系统正常。"
     exit 1
 }
 
+# 保留原输出扩展列（TestResult/TestDate 由后续压测环节回填）
 $rows = @()
-foreach ($m in $memSticks) {
-
-    $capGB   = if ($m.Capacity) { [math]::Round($m.Capacity / 1GB, 0) } else { 0 }
-    $memType = switch ($m.SMBIOSMemoryType) {
-        24 { "DDR3" }
-        26 { "DDR4" }
-        34 { "DDR5" }
-        35 { "LPDDR5" }
-        36 { "LPDDR5X" }
-        default { "Type$($m.SMBIOSMemoryType)" }
-    }
-
-    # SPD 序列号常有前导 0，清洗后判空
-    $serial = ($m.SerialNumber -replace '^0+', '').Trim()
-    if ($serial -eq "") { $serial = "UNKNOWN" }
-    $pn = ($m.PartNumber -replace '\s', '').Trim()
-
-    # ---------- 智能分类规则 ----------
-    $issues = @()
-    if ($memType -ne "DDR5") { $issues += "非DDR5($memType)" }
-    if ($serial -eq "UNKNOWN") { $issues += "SPD无序列号" }
-    if ($pn -eq "") { $issues += "SPD无型号" }
-    if ($capGB -eq 0) { $issues += "容量读取异常" }
-
-    # 与预期清单匹配
-    $matchState = "未提供预期清单"
-    if ($expected.Count -gt 0 -and $serial -ne "UNKNOWN") {
-        $found = $expected | Where-Object { $_.SerialNumber -eq $serial }
-        if ($found) {
-            $matchState = "匹配"
-            if ($found.Capacity -and ([int]$found.Capacity -ne $capGB)) {
-                $issues += "容量与预期不符(预期$($found.Capacity)GB/实际${capGB}GB)"
-            }
-        } else {
-            $matchState = "不在清单中"
-            $issues += "不在预期清单"
-        }
-    }
-
-    $status = if ($issues.Count -eq 0) { "正常" } else { "待复核" }
-
-    $rows += [PSCustomObject]@{
-        Batch        = $BatchName
-        Slot         = $m.DeviceLocator
-        BankLabel    = $m.BankLabel
-        SerialNumber = $serial
-        PartNumber   = $pn
-        Manufacturer = $m.Manufacturer
-        CapacityGB   = $capGB
-        SpeedMTs     = $m.Speed
-        MemType      = $memType
-        MatchState   = $matchState
-        Issues       = ($issues -join "; ")
-        Status       = $status
-        TestResult   = ""   # 由后续压测环节回填
-        TestDate     = ""   # 由后续压测环节回填
-    }
+foreach ($inv in $inventory) {
+    $inv | Add-Member -NotePropertyName TestResult -NotePropertyValue "" -Force
+    $inv | Add-Member -NotePropertyName TestDate -NotePropertyValue "" -Force
+    $rows += $inv
 }
 
 # ---------- 输出批次清单 ----------

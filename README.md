@@ -13,12 +13,17 @@
 - **附加监控**：WHEA/ECC 错误采集、IPMI 温度采样、断电循环（`chassis power cycle`）。
 - **断点续测**：日志与解析分离，`-ParseOnly` 可断点续解析。
 - **离线包**：Memtest86+ v9.00 ISO/binaries 已打包（`SOL内存测试离线包/`）。
+- **自动化测试**：`tests/` 覆盖共享库、参数校验与历史库（`test-lib.ps1` / `test-args.ps1` / `test_db.py`）。
+- **单源构建**：`scripts\build.ps1` 一键同步离线包，VERSION 单一来源。
+- **JSON 事件流**：主流程输出一行 JSON 事件，供日志/GUI 等外部工具消费。
+- **历史库（可选）**：`db/` SQLite 历史库（需 Python 3），支持导入/查询/导出/合并。
 
 ## 环境要求
 
 - Windows 10 / Server 2016+，PowerShell 5.1+（系统自带）
 - SOL 方式需 ipmitool.exe（官方不发布 Windows 版，见 `tools/Setup-Tools.ps1` 或 [04-运行环境与依赖安装说明.md](docs/04-运行环境与依赖安装说明.md)）
 - 被测服务器需开启 BMC SOL + BIOS 串口重定向（115200）
+- 历史库可选功能需 Python 3（`db/` 工具，见 [05-使用手册.md](docs/05-使用手册.md) 第 10 节）
 
 ## 快速开始
 
@@ -81,10 +86,16 @@ memory-tests/
 │   ├── 10-Serial物理串口线使用指南.md
 │   └── 11-引导方式对比评估.md
 ├── scripts/                   # 编排脚本
+│   ├── lib_common.ps1         # 共享库（识别/解析/通用工具）
 │   ├── Run-MemtestSuite.ps1
 │   ├── Run-BatchScheduler.ps1
-│   └── Identify-Memory.ps1
+│   ├── Identify-Memory.ps1
+│   └── build.ps1              # 单源构建（同步离线包）
+├── tests/                     # 自动化测试（test-lib/test-args/test_db）
+├── db/                        # SQLite 历史库（可选，需 Python 3）
 ├── config/                    # 批次/预期清单模板
+├── VERSION                    # 版本单一来源
+├── AGENTS.md                  # 协作约定
 ├── SOL内存测试离线包/          # 离线部署包（含 Memtest86+ v9 ISO/binaries）
 └── .gitignore
 ```
