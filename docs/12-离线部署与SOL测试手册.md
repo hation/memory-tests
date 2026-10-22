@@ -1,5 +1,8 @@
 ﻿# 12 · 离线部署与 SOL 测试手册
 
+> 本机 BMC：IP `10.0.0.10` / 用户名 `root`（密码运行中提示输入）；换机器只改这一处。
+> 每条命令给两行：**原格式**（通用占位符）+ **本机版**（已填好，复制即用）。
+
 > 状态：[当前有效]（2026-10-22）
 > 变更记录：2026-10-22 创建
 > 目标读者：机房现场操作员。目标场景：**无网环境**，拿离线包从零把服务器内存验收跑起来。
@@ -114,10 +117,16 @@ cd C:\memtest\scripts
 
 ```powershell
 # ① 服务器本机（已进 Windows）：带内 + 带外合并
+# 原格式（通用）
 .\scripts\Run-ServerAssessment.ps1 -Local -BmcHost <BMC_IP> -BmcUser <账号> -BmcPass <密码> -MachineName srv01
+# 👉 本机版（复制即用，密码运行中提示）
+.\scripts\Run-ServerAssessment.ps1 -Local -BmcHost 10.0.0.10 -BmcUser root -MachineName srv01
 
 # ② 编排机远程（服务器还没进系统时，先做带外部分）
+# 原格式（通用）
 .\scripts\Run-ServerAssessment.ps1 -BmcHost <BMC_IP> -BmcUser <账号> -BmcPass <密码>
+# 👉 本机版（复制即用，密码运行中提示）
+.\scripts\Run-ServerAssessment.ps1 -BmcHost 10.0.0.10 -BmcUser root
 ```
 
 自动完成：带内 CIM（内存槽/ECC/类型/频率/CPU/SecureBoot）+ 带外 BMC/IPMI（SOL/断电循环/测温）→ 输出 17 项可行性 + 建议动作。
@@ -162,8 +171,12 @@ log=ttyS0,115200 maxpasses=4
 ### 3.3 单批 SOL 全自动验收
 
 ```powershell
+# 原格式（通用）
 .\scripts\Run-MemtestSuite.ps1 -BatchName srv01-a1 -BootMethod SOL `
   -BmcHost <BMC_IP> -BmcUser <账号> -BmcPass <密码> -MaxPasses 4 -ConfirmSwitch
+# 👉 本机版（复制即用，密码运行中提示）
+.\scripts\Run-MemtestSuite.ps1 -BatchName srv01-a1 -BootMethod SOL `
+  -BmcHost 10.0.0.10 -BmcUser root -MaxPasses 4 -ConfirmSwitch
 # 可选：-MonitorEcc -MonitorTemp -RestartLoop 2
 ```
 
