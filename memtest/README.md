@@ -1,6 +1,9 @@
 ﻿> 工具版本：v9
 # SOL 内存测试离线包（Memtest86+ 全自动验收）
 
+> 本机 BMC：IP `10.0.0.10` / 用户名 `root`（密码运行中提示输入）；换机器只改这一处。
+> 每条命令给两行：**原格式**（通用占位符）+ **本机版**（已填好，复制即用）。
+
 基于 Windows PowerShell 的 **DDR5 内存条 SOL 全自动验收工具包**。编排器远程引导 Memtest86+、抓取 MTLOG 日志、解析并汇总成逐根可追溯的压测报告。
 
 > 用途：1000 根内存条批量验收（配合 17 项验收方案与智能识别），全自动无人值守。
@@ -66,15 +69,22 @@ memtest/
 .\scripts\check_env.ps1
 .\scripts\Run-MemtestSuite.ps1 -Help
 # 手动 SOL 验证（内置 ipmitool）
+# 原格式（通用）
 .\tools\ipmitool\ipmitool.exe -I lanplus -H <BMC_IP> -U <user> -P <pass> sol activate
+# 👉 本机版（复制即用，密码运行中提示）
+.\tools\ipmitool\ipmitool.exe -I lanplus -H 10.0.0.10 -U root sol activate
 ```
 
 ### 第 2 步：单批 SOL 全自动验收
 
 ```powershell
 cd scripts
+# 原格式（通用）
 .\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
   -BmcHost 192.168.1.10 -BmcUser admin -BmcPass pwd -MaxPasses 4 -ConfirmSwitch
+# 👉 本机版（复制即用，密码运行中提示）
+.\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
+  -BmcHost 10.0.0.10 -BmcUser root -MaxPasses 4 -ConfirmSwitch
 # 可选：-MonitorEcc -MonitorTemp -RestartLoop 2
 ```
 

@@ -1,5 +1,8 @@
 ﻿# memory-tests —— DDR5 内存条 SOL 全自动验收工具
 
+> 本机 BMC：IP `10.0.0.10` / 用户名 `root`（密码运行中提示输入）；换机器只改这一处。
+> 每条命令给两行：**原格式**（通用占位符）+ **本机版**（已填好，复制即用）。
+
 > "插满内存，跑一条命令，拿走逐根结论"
 >
 > 基于 Windows PowerShell 的 DDR5 内存条**批量压力测试与验收**工具：PowerShell 作为编排器，引导 Memtest86+ 执行真正的内存测试（SOL/Serial/USB/EFI 四种方式），抓取并解析 MTLOG，自动汇总成逐根可追溯的压测报告。配套文档见 `docs/`（编号 01-11）。
@@ -29,8 +32,12 @@
 
 ```powershell
 # ① 单批 SOL 全自动（4 轮验收）
+# 原格式（通用）
 .\scripts\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
   -BmcHost 192.168.1.10 -BmcUser admin -BmcPass pwd -MaxPasses 4 -ConfirmSwitch
+# 👉 本机版（复制即用，密码运行中提示）
+.\scripts\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
+  -BmcHost 10.0.0.10 -BmcUser root -MaxPasses 4 -ConfirmSwitch
 
 # ② 批量 1000 根：填好批次清单后运行调度器
 .\scripts\Run-BatchScheduler.ps1 -ManifestCsv .\config\batches.csv -DryRun      # 先预览
