@@ -426,3 +426,54 @@ function Get-SystemEvents {
     } catch {}
     return $errs
 }
+
+# ----------------------------------------------------------------------------
+# 一键化改造：内置 Python 与 BMC 双格式（Get-PythonExe / Read-BmcPass / Invoke-IpmiProbe）
+# ----------------------------------------------------------------------------
+
+# 定位内置 Python 解释器：优先 <包根>\tools\python\python.exe，其次 PATH 中的 python，
+# 都没有则返回 $null。
+function Get-PythonExe {
+    $localPy = Join-Path (Split-Path -Parent $PSScriptRoot) "tools\python\python.exe"
+    if (Test-Path -LiteralPath $localPy) { return $localPy }
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    return $null
+}
+
+# 读取 BMC 密码：$Pass 非空直接返回；为空时优先取管道输入，否则 Read-Host -AsSecureString
+# 交互输入。明文转换用 SecureStringToBSTR/PtrToStringUni/ZeroFreeBSTR（finally 中释放 BSTR）。
+function Read-BmcPass {
+    param([string]$Pass = "", [string]$Prompt = "BMC 密码")
+
+    if ($Pass -ne "") { return $Pass }
+    $piped = @($input)
+    if ($piped.Count -gt 0) { return [string]$piped[0] }
+    $sec = Read-Host $Prompt -AsSecureString
+    $ptr = [System.IntPtr]::Zero
+    try {
+        $ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+        return [System.Runtime.InteropServices.Marshal]::PtrToStringUni($ptr)
+    } finally {
+        if ($ptr -ne [System.IntPtr]::Zero) {
+            [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+        }
+    }
+}
+
+# 调用 ipmitool 探针并捕获输出：stdout 行取字符串、stderr 行取 ErrorRecord 文本，
+# 返回 Code=$LASTEXITCODE。
+function Invoke-IpmiProbe {
+    param([string]$IpmiTool, [string[]]$IpmiArgs)
+
+    $out = @()
+    $err = @()
+    & $IpmiTool @IpmiArgs 2>&1 | ForEach-Object {
+        if ($_ -is [System.Management.Automation.ErrorRecord]) {
+            $err += $_.ToString()
+        } else {
+            $out += $_.ToString()
+        }
+    }
+    return [PSCustomObject]@{ Out = $out; Err = $err; Code = $LASTEXITCODE }
+}

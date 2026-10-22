@@ -23,7 +23,7 @@ if ($psv.Major -ge 5 -and ($psv.Major -gt 5 -or $psv.Minor -ge 1)) {
 }
 
 # [2] 关键脚本齐全
-$scripts = @('lib_common.ps1','Identify-Memory.ps1','Run-MemtestSuite.ps1','Run-BatchScheduler.ps1','Check-ServerCapabilities.ps1','Run-ServerAssessment.ps1')
+$scripts = @('lib_common.ps1','Identify-Memory.ps1','Run-MemtestSuite.ps1','Run-BatchScheduler.ps1','Check-ServerCapabilities.ps1','Run-ServerAssessment.ps1','Diag-Bmc.ps1')
 $missing = @($scripts | Where-Object { -not (Test-Path (Join-Path $PSScriptRoot $_)) })
 if ($missing.Count -eq 0) {
     Write-Host "[2] 脚本 $($scripts.Count) 个 ... OK"
@@ -70,12 +70,18 @@ if ((Test-Path $batches) -and (Test-Path $conf)) {
     $warn++
 }
 
-# [6] SQLite 历史库（可选，需 Python 3）
+# [6] SQLite 历史库（可选，需 Python 3；优先内置 tools\python，其次系统 PATH）
 $dbPy = Join-Path (Split-Path -Parent $PSScriptRoot) 'db\db_common.py'
 if (Test-Path $dbPy) {
-    $pyOk = $null -ne (Get-Command python -ErrorAction SilentlyContinue)
-    $pyState = if ($pyOk) { '可用' } else { '未装（该功能跳过）' }
-    Write-Host "[6] SQLite 历史库（可选）: db 存在，Python 3 $pyState"
+    $py = Get-PythonExe
+    if ($py) {
+        $ver = & $py --version 2>&1 | Select-Object -First 1
+        $src = if ($py -like "*tools\python*") { "内置 tools\python" } else { "系统 PATH" }
+        Write-Host "[6] SQLite 历史库（可选）: db 存在，Python $ver（$src）"
+    } else {
+        Write-Host "[6] SQLite 历史库（可选）: db 存在，Python 3 未装（该功能跳过）"
+        $warn++
+    }
 } else {
     Write-Host "[6] SQLite 历史库（可选）: 未随包"
 }

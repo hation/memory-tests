@@ -26,6 +26,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# 共享库（Read-BmcPass 等公共逻辑；本脚本自带的 Invoke-IpmiProbe 定义在后，会遮蔽 lib 版本）
+. $PSScriptRoot\lib_common.ps1
+
+# 管道密码优先：脚本顶层 $input 可读外部管道（Read-BmcPass 的函数作用域内读不到，故在此先消费，
+# 否则 -File 模式管道场景会落入 Read-Host 等待控制台而挂起）。
+$pipeIn = @($input)
+if ($BmcPass -eq "" -and $pipeIn.Count -gt 0) { $BmcPass = [string]$pipeIn[0] }
+
 # ---- 内置 ipmitool 自动发现（与 Run-MemtestSuite 一致） ----
 if ($IpmiTool -eq "ipmitool") {
     $bundled = Join-Path (Split-Path -Parent $PSScriptRoot) "tools\ipmitool\ipmitool.exe"
@@ -94,6 +102,8 @@ function Invoke-IpmiProbe([string[]]$IpmiArgs) {
     }
 }
 if ($BmcHost -ne "" -and (Test-Path -LiteralPath $IpmiTool)) {
+    # 密码：带外探测需 BMC 密码而调用方未显式提供 → 管道/交互提示一次（置于 $a 拼装之前）
+    if ($BmcHost -ne "" -and -not $BmcPass) { $BmcPass = Read-BmcPass -Prompt "BMC 密码（$BmcHost）" }
     try {
         $a = @("-I", "lanplus", "-H", $BmcHost)
         if ($BmcUser) { $a += @("-U", $BmcUser) }

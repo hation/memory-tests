@@ -1,5 +1,8 @@
 # Memtest86+ SOL 方式使用指南（Windows 编排器）
 
+> 本机 BMC：IP `10.0.0.10` / 用户名 `root`（密码运行中提示输入）；换机器只改这一处。
+> 每条命令给两行：**原格式**（通用占位符）+ **本机版**（已填好，复制即用）。
+
 > 状态：[当前有效]（2026-10-22）
 > 变更记录：2026-10-22 文档体系编号化（对齐 disk-tests）；工程基建优化更新
 
@@ -86,12 +89,21 @@ Windows 编排器：ipmitool sol activate 抓流 → 写文件 → 解析 MTLOG
 
 ```powershell
 # 标准 SOL 全自动验收（4 轮）
+# 原格式（通用）
 .\scripts\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
   -BmcHost 192.168.1.10 -BmcUser admin -BmcPass pwd -MaxPasses 4 -ConfirmSwitch
+# 👉 本机版（复制即用，密码运行中提示）
+.\scripts\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
+  -BmcHost 10.0.0.10 -BmcUser root -MaxPasses 4 -ConfirmSwitch
 
 # 附加 ECC 监控 + 温度监控 + 测完断电循环 2 次
+# 原格式（通用）
 .\scripts\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
   -BmcHost 192.168.1.10 -BmcUser admin -BmcPass pwd -MaxPasses 4 `
+  -MonitorEcc -MonitorTemp -RestartLoop 2 -ConfirmSwitch
+# 👉 本机版（复制即用，密码运行中提示）
+.\scripts\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod SOL `
+  -BmcHost 10.0.0.10 -BmcUser root -MaxPasses 4 `
   -MonitorEcc -MonitorTemp -RestartLoop 2 -ConfirmSwitch
 ```
 
@@ -109,18 +121,39 @@ Windows 编排器：ipmitool sol activate 抓流 → 写文件 → 解析 MTLOG
 ### 5.3 手动验证命令（排查用）
 
 ```powershell
+# 原格式（通用）
+.\scripts\Diag-Bmc.ps1 -BmcHost <BMC_IP> -BmcUser <用户>
+# 👉 本机版（复制即用，密码运行中提示）
+.\scripts\Diag-Bmc.ps1 -BmcHost 10.0.0.10 -BmcUser root
+```
+
+> `Diag-Bmc.ps1` 一键诊断四步（`mc info` / `chassis status` / `sdr elist` / `sol activate` 短探测）。需要单独操作某一步时，用下面的原始 ipmitool 命令（每条附本机版，密码运行中提示）：
+
+```powershell
+# 原格式（通用）
 # 手动开 SOL 看输出（Ctrl+~ 或 ~. 退出会话）
 ipmitool -I lanplus -H <BMC_IP> -U <user> -P <pass> sol activate
+# 👉 本机版
+ipmitool -I lanplus -H 10.0.0.10 -U root sol activate
 
 # 退出 SOL
 ipmitool -I lanplus -H <BMC_IP> -U <user> -P <pass> sol deactivate
+# 👉 本机版
+ipmitool -I lanplus -H 10.0.0.10 -U root sol deactivate
 
 # 远程设置一次性引导设备并重启（配合虚拟介质/EFI）
 ipmitool -I lanplus -H <BMC_IP> -U <user> -P <pass> chassis bootdev cdrom   # 或 efi / pxe / hd
+# 👉 本机版
+ipmitool -I lanplus -H 10.0.0.10 -U root chassis bootdev cdrom
+
 ipmitool -I lanplus -H <BMC_IP> -U <user> -P <pass> chassis power cycle
+# 👉 本机版
+ipmitool -I lanplus -H 10.0.0.10 -U root chassis power cycle
 
 # 读温度传感器（FR-11）
 ipmitool -I lanplus -H <BMC_IP> -U <user> -P <pass> sdr elist
+# 👉 本机版
+ipmitool -I lanplus -H 10.0.0.10 -U root sdr elist
 ```
 
 ---

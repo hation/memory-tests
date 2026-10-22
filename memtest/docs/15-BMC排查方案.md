@@ -1,5 +1,8 @@
 # 15 · BMC 连通与 SOL 排查方案
 
+> 本机 BMC：IP `10.0.0.10` / 用户名 `root`（密码运行中提示输入）；换机器只改这一处。
+> 每条命令给两行：**原格式**（通用占位符）+ **本机版**（已填好，复制即用）。
+
 > 状态：[当前有效]（2026-10-22）
 > 变更记录：2026-10-22 创建（依据服务器评估"需 BMC"实测问题沉淀）
 > 适用：能力评估显示「需 BMC」、SOL 收不到日志、乱码、不自动重启等。
@@ -29,23 +32,16 @@
 
 > 你的 5 和 10 同时「需 BMC」= `mc info` 没通，**与账号是否管理员无关**。
 
-### 2.2 诊断命令序列（逐条跑，看真实输出）
+### 2.2 诊断命令序列（一键跑，看真实输出）
 
 ```powershell
-# ① 基础连通（决定一切）
-.\tools\ipmitool\ipmitool.exe -I lanplus -H <BMC_IP> -U root -P <密码> mc info
-
-# ② 加密套件回退（最常见的修复）
-.\tools\ipmitool\ipmitool.exe -I lanplus -C 3 -H <BMC_IP> -U root -P <密码> mc info
-# 部分新 BMC 用 -C 17：
-.\tools\ipmitool\ipmitool.exe -I lanplus -C 17 -H <BMC_IP> -U root -P <密码> mc info
-
-# ③ 断电循环能力
-.\tools\ipmitool\ipmitool.exe -I lanplus -C 3 -H <BMC_IP> -U root -P <密码> chassis status
-
-# ④ 温度传感器（ORT 前提）
-.\tools\ipmitool\ipmitool.exe -I lanplus -C 3 -H <BMC_IP> -U root -P <密码> sdr elist | Select-String "degrees C"
+# 原格式（通用）
+.\scripts\Diag-Bmc.ps1 -BmcHost <BMC_IP> -BmcUser <用户>
+# 👉 本机版（复制即用，密码运行中提示）
+.\scripts\Diag-Bmc.ps1 -BmcHost 10.0.0.10 -BmcUser root
 ```
+
+> Diag-Bmc 四步：① `mc info`（加密套件自动回退 -C 3/-C 17）② `chassis status`（断电循环能力）③ `sdr elist`（温度传感器）④ `sol activate`（短探测）。任一步失败对照 §2.3 三大原因排查。
 
 ### 2.3 三大原因对照表
 
@@ -58,10 +54,10 @@
 ### 2.4 判断流程
 
 ```
-跑 ①② 任一成功（mc info 有输出）
-  ├─ 是 → BMC 通了 → 再跑 ③④：
-  │      ├─ ③ 通过 → item 10 转「可测」
-  │      ├─ ④ 通过 → item 5 转「可测」
+跑 Diag-Bmc 四步（① mc info 有输出即 BMC 通）
+  ├─ 是 → BMC 通了 → 看 ②③④：
+  │      ├─ ② 通过 → item 10 转「可测」
+  │      ├─ ③ 通过 → item 5 转「可测」
   │      └─ 单项仍失败 → 查 BMC 对应功能是否启用（SOL 见第 3 节）
   └─ 否 → 按 2.3 三大原因逐个排查
 ```
@@ -90,11 +86,19 @@
 
 ## 4. 快速验证清单（排查用）
 
-- [ ] `mc info` 有输出（必要时 `-C 3`）
-- [ ] `chassis status` 有输出（item 10 前提）
-- [ ] `sdr elist` 含 `degrees C` 条目（item 5 前提）
-- [ ] 手动 `sol activate` 能看到 BIOS 启动输出
-- [ ] 重跑评估：`Run-ServerAssessment.ps1 -Local -BmcHost <IP> -BmcUser root -BmcPass <密码>` → 5/10 转「可测」
+```powershell
+# 原格式（通用）
+.\scripts\Diag-Bmc.ps1 -BmcHost <BMC_IP> -BmcUser <用户>
+# 👉 本机版（复制即用，密码运行中提示）
+.\scripts\Diag-Bmc.ps1 -BmcHost 10.0.0.10 -BmcUser root
+```
+
+- [ ] Diag-Bmc ① `mc info` 有输出（必要时自动 `-C 3`）
+- [ ] ② `chassis status` 有输出（item 10 前提）
+- [ ] ③ `sdr elist` 含 `degrees C` 条目（item 5 前提）
+- [ ] ④ `sol activate` 能看到 BIOS 启动输出
+- [ ] 重跑评估：`.\scripts\Run-ServerAssessment.ps1 -Local -BmcHost <BMC_IP> -BmcUser root -BmcPass <密码>` → 5/10 转「可测」
+  - 👉 本机版：`.\scripts\Run-ServerAssessment.ps1 -Local -BmcHost 10.0.0.10 -BmcUser root`（密码运行中提示）
 
 ---
 
