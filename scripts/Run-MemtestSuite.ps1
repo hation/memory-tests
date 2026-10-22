@@ -352,6 +352,7 @@ function Export-TestReport {
     foreach ($inv in $Inventory) {
         $reportRows += [PSCustomObject]@{
             Batch        = $BatchName
+            ToolVersion  = Get-AppVersion
             Slot         = $inv.Slot
             SerialNumber = $inv.SerialNumber
             PartNumber   = $inv.PartNumber
