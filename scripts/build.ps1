@@ -1,4 +1,4 @@
-﻿# build.ps1 — 单源构建：从源码（scripts/docs/boot/config/tools + VERSION）一键同步/生成离线包
+﻿# build.ps1 — 单源构建：从源码（scripts/docs/boot/config/tools/db + VERSION）一键同步/生成离线包
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 [-KitDir <dir>]
 # 幂等：连续两次构建，CHECKSUM.txt 逐字节一致。
 
@@ -67,6 +67,14 @@ foreach ($d in @('boot', 'config', 'tools')) {
     }
 }
 
+# db：可选 Python 历史库（SQLite，需 Python 3），存在则整目录同步
+$dbSrc = Join-Path $Repo 'db'
+$dbDst = Join-Path $KitDir 'db'
+if (Test-Path -LiteralPath $dbSrc) {
+    New-Item -ItemType Directory -Path $dbDst -Force | Out-Null
+    Copy-Item -Path (Join-Path $dbSrc '*') -Destination $dbDst -Recurse -Force
+}
+
 # ---------- ② 注入版本 ----------
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $verLine = "> 工具版本：$ver"
@@ -128,6 +136,12 @@ foreach ($doc in $docsList) {
 $keyFiles += (Join-Path $KitDir 'boot\memtest.iso')
 $keyFiles += (Join-Path $KitDir 'tools\README-tools.md')
 $keyFiles += (Join-Path $KitDir 'VERSION')
+# db 脚本（可选功能，同步进包则一并纳入校验清单；不存在则跳过，保持向后兼容）
+if (Test-Path -LiteralPath (Join-Path $KitDir 'db')) {
+    Get-ChildItem -LiteralPath (Join-Path $KitDir 'db') -File | ForEach-Object {
+        $keyFiles += $_.FullName
+    }
+}
 
 $lines = foreach ($f in $keyFiles) {
     $hash = (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant()
