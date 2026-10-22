@@ -150,7 +150,8 @@ $docsList = @(
     '10-Serial物理串口线使用指南.md',
     '11-引导方式对比评估.md',
     '12-离线部署与SOL测试手册.md',
-    '13-服务器信息识别指南.md'
+    '13-服务器信息识别指南.md',
+    '14-术语解释.md'
 )
 $keyFiles = @(
     (Join-Path $KitDir 'scripts\lib_common.ps1'),
