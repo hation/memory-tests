@@ -1,10 +1,14 @@
 ﻿# build.ps1 — 单源构建：从源码（scripts/docs/boot/config/tools/db + VERSION）一键同步/生成离线包
-# 用法：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 [-KitDir <dir>]
-# 幂等：连续两次构建，CHECKSUM.txt 逐字节一致。
+# 用法：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 [-KitDir <dir>] [-Bump] [-Zip]
+# 幂等：连续两次构建（不带 -Bump），CHECKSUM.txt 逐字节一致。
+# 版本：VERSION 文件为单一来源；加 -Bump 每次打包递增（v1->v2->v3...，参考 disk-tests $DKVersion 约定）；
+#      加 -Zip 在构建后生成 <离线包名>-<版本>.zip 交付包。
 
 [CmdletBinding()]
 param(
-    [string]$KitDir = ''
+    [string]$KitDir = '',
+    [switch]$Bump,    # 递增版本号后构建（每次打包用）
+    [switch]$Zip      # 构建后压缩成交付 zip（以版本命名）
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,6 +26,14 @@ if (-not (Test-Path -LiteralPath $VERSION_FILE)) {
     exit 1
 }
 $ver = (Get-Content -LiteralPath $VERSION_FILE -Raw).Trim()
+
+# -Bump：每次打包递增版本号（v1->v2->v3...，单一来源 VERSION，参考 disk-tests $DKVersion 约定）
+if ($Bump) {
+    $newVer = if ($ver -match '^v(\d+)$') { "v$([int]$matches[1] + 1)" } else { "v1" }
+    [System.IO.File]::WriteAllText($VERSION_FILE, $newVer, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "==> 版本递增: $ver -> $newVer"
+    $ver = $newVer
+}
 
 # 确保 KitDir 存在并规范化（绝对路径）
 if (-not (Test-Path -LiteralPath $KitDir)) {
@@ -169,3 +181,12 @@ $lines = @($lines | Sort-Object)   # 固定行序，保证幂等
 [System.IO.File]::WriteAllLines($checksumPath, $lines, $utf8NoBom)
 
 Write-Host "==> Done. CHECKSUM.txt written ($($lines.Count) files)."
+
+# -Zip：构建后压缩成交付包 <离线包名>-<版本>.zip（放在离线包同级的仓库根目录）
+if ($Zip) {
+    $kitName = Split-Path -Leaf $KitDir
+    $zipPath = Join-Path $Repo "$kitName-$ver.zip"
+    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+    Compress-Archive -Path (Join-Path $KitDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
+    Write-Host "==> 交付包已生成: $zipPath"
+}
