@@ -1,0 +1,8 @@
+MTLOG ts=0.0 ev=start version=9.0
+MTLOG ts=0.1 ev=spd slot=0 size_mb=16384 type=ddr5 freq=5600 ecc=no mfg=Hynix sku=HMCG78AGBSA095N
+MTLOG ts=0.2 ev=spd slot=1 size_mb=16384 type=ddr5 freq=5600 ecc=no mfg=Hynix sku=HMCG78AGBSA095N
+MTLOG ts=5.0 ev=pass_end pass=0 errors=0 status=pass
+MTLOG ts=10.0 ev=pass_end pass=1 errors=0 status=pass
+MTLOG ts=15.0 ev=pass_end pass=2 errors=0 status=pass
+MTLOG ts=20.0 ev=pass_end pass=3 errors=0 status=pass
+MTLOG ts=21.0 ev=done passes=4 status=pass

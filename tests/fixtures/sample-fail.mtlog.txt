@@ -1,0 +1,4 @@
+MTLOG ts=0.0 ev=start version=9.0
+MTLOG ts=5.0 ev=pass_end pass=0 errors=1 status=fail
+MTLOG ts=5.1 ev=data addr=0x100000 expect=0x55 actual=0x5A
+MTLOG ts=6.0 ev=done passes=1 status=fail

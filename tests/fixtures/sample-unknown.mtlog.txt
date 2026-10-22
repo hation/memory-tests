@@ -1,0 +1,4 @@
+MTLOG ts=0.0 ev=start version=9.0
+MTLOG ts=9.0 ev=weird_key k=v
+MTLOG ts=10.0 ev=pass_end pass=0 errors=0 status=pass
+MTLOG ts=11.0 ev=done passes=1 status=pass
