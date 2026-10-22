@@ -53,7 +53,8 @@ $scriptFiles = @(
     'lib_common.ps1',
     'Identify-Memory.ps1',
     'Run-BatchScheduler.ps1',
-    'Run-MemtestSuite.ps1'
+    'Run-MemtestSuite.ps1',
+    'Check-ServerCapabilities.ps1'
 )
 Sync-Dir -Src $scriptSrc -Dst $scriptDst -Exclude @('build.ps1')
 foreach ($f in $scriptFiles) {
