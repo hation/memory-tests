@@ -33,32 +33,42 @@ Write-Host "==> Build offline kit: $KitDir"
 Write-Host "==> Source version: $ver"
 
 # ---------- ① 同步 ----------
+# 通用清理：同步目录先清空再拷贝，源侧删除的文件不会残留进离线包（防陈旧漂移）
+function Sync-Dir {
+    param([string]$Src, [string]$Dst, [string[]]$Exclude = @(), [switch]$FilesOnly)
+    New-Item -ItemType Directory -Path $Dst -Force | Out-Null
+    Get-ChildItem -LiteralPath $Dst -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    $items = Get-ChildItem -LiteralPath $Src -Force | Where-Object {
+        ($Exclude -notcontains $_.Name) -and (-not ($FilesOnly -and $_.PSIsContainer))
+    }
+    foreach ($it in $items) {
+        Copy-Item -LiteralPath $it.FullName -Destination $Dst -Recurse -Force
+    }
+}
+
 # scripts：只同步 3 个编排/识别 ps1 + lib_common.ps1（build.ps1 本身不进入离线包）
 $scriptSrc = Join-Path $Repo 'scripts'
 $scriptDst = Join-Path $KitDir 'scripts'
-New-Item -ItemType Directory -Path $scriptDst -Force | Out-Null
 $scriptFiles = @(
     'lib_common.ps1',
     'Identify-Memory.ps1',
     'Run-BatchScheduler.ps1',
     'Run-MemtestSuite.ps1'
 )
+Sync-Dir -Src $scriptSrc -Dst $scriptDst -Exclude @('build.ps1')
 foreach ($f in $scriptFiles) {
-    $srcFile = Join-Path $scriptSrc $f
-    if (-not (Test-Path -LiteralPath $srcFile)) {
-        Write-Error "Source script missing: $srcFile"
+    if (-not (Test-Path -LiteralPath (Join-Path $scriptSrc $f))) {
+        Write-Error "Source script missing: $f"
         exit 1
     }
-    Copy-Item -LiteralPath $srcFile -Destination $scriptDst -Force
 }
 
 $docSrc = Join-Path $Repo 'docs'
 $docDst = Join-Path $KitDir 'docs'
-New-Item -ItemType Directory -Path $docDst -Force | Out-Null
-# 只同步 docs 顶层文档文件（不递归子目录，避免带入 superpowers 等开发工作区目录）
-Get-ChildItem -LiteralPath $docSrc -File | Copy-Item -Destination $docDst -Force
+# 只同步 docs 顶层文档文件（FilesOnly：不递归子目录，避免带入 superpowers 等开发工作区目录）
+Sync-Dir -Src $docSrc -Dst $docDst -FilesOnly
 
-foreach ($d in @('boot', 'config', 'tools')) {
+foreach ($d in @('boot', 'config', 'tools', 'conf')) {
     $src = Join-Path $Repo $d
     $dst = Join-Path $KitDir $d
     if (Test-Path -LiteralPath $src) {
@@ -67,16 +77,16 @@ foreach ($d in @('boot', 'config', 'tools')) {
     }
 }
 
-# db：可选 Python 历史库（SQLite，需 Python 3），存在则整目录同步
+# db：可选 Python 历史库（SQLite，需 Python 3），存在则同步（排除 __pycache__ 字节码产物）
 $dbSrc = Join-Path $Repo 'db'
 $dbDst = Join-Path $KitDir 'db'
 if (Test-Path -LiteralPath $dbSrc) {
-    New-Item -ItemType Directory -Path $dbDst -Force | Out-Null
-    Copy-Item -Path (Join-Path $dbSrc '*') -Destination $dbDst -Recurse -Force
+    Sync-Dir -Src $dbSrc -Dst $dbDst -Exclude @('__pycache__')
 }
 
 # ---------- ② 注入版本 ----------
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$utf8Bom   = New-Object System.Text.UTF8Encoding($true)
 $verLine = "> 工具版本：$ver"
 
 # KitDir\VERSION
@@ -84,6 +94,7 @@ $verLine = "> 工具版本：$ver"
 
 # KitDir\README.md：幂等注入版本行（已存在该行则先删除再插入到文件开头）
 # 内容层幂等：TrimEnd 去除末尾换行/空行，避免 -split 产生尾随空元素在尾部累积空行
+# 写回带 BOM（UTF8-BOM）：README 为中文内容，PS5 读取无 BOM UTF-8 中文可能乱码
 $readmePath = Join-Path $KitDir 'README.md'
 if (Test-Path -LiteralPath $readmePath) {
     $raw = [System.IO.File]::ReadAllText($readmePath, $utf8NoBom).TrimEnd("`r", "`n")
@@ -92,7 +103,7 @@ if (Test-Path -LiteralPath $readmePath) {
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine($verLine)
     foreach ($l in $filtered) { [void]$sb.AppendLine($l) }
-    [System.IO.File]::WriteAllText($readmePath, $sb.ToString(), $utf8NoBom)
+    [System.IO.File]::WriteAllText($readmePath, $sb.ToString(), $utf8Bom)
 }
 
 # ---------- ③ 校验关键文件存在性 ----------
@@ -135,6 +146,7 @@ foreach ($doc in $docsList) {
 }
 $keyFiles += (Join-Path $KitDir 'boot\memtest.iso')
 $keyFiles += (Join-Path $KitDir 'tools\README-tools.md')
+$keyFiles += (Join-Path $KitDir 'README.md')
 $keyFiles += (Join-Path $KitDir 'VERSION')
 # db 脚本（可选功能，同步进包则一并纳入校验清单；不存在则跳过，保持向后兼容）
 if (Test-Path -LiteralPath (Join-Path $KitDir 'db')) {
