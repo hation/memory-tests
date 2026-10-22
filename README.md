@@ -1,4 +1,4 @@
-# memory-tests —— DDR5 内存条 SOL 全自动验收工具
+﻿# memory-tests —— DDR5 内存条 SOL 全自动验收工具
 
 > "插满内存，跑一条命令，拿走逐根结论"
 >
@@ -43,7 +43,7 @@
 
 ```powershell
 # 只解析已有日志（断点续测）
-.\scripts\Run-MemtestSuite.ps1 -ParseOnly -LogFile .\memory_results\raw\batch01.mtlog.txt
+.\scripts\Run-MemtestSuite.ps1 -ParseOnly -LogFile .\results\raw\batch01.mtlog.txt
 
 # Serial 完全离线
 .\scripts\Run-MemtestSuite.ps1 -BootMethod Serial -SerialPort COM3 -BaudRate 115200 -MaxPasses 4
@@ -58,7 +58,7 @@
 ## 输出
 
 ```text
-<LogPath>/（默认 scripts\memory_results\，用 -LogPath 重定向到 output\）
+<LogPath>/（默认 results\，用 -LogPath 重定向到 output\）
 ├── <批次>-inventory.csv      # 识别建档
 ├── <批次>-report.csv         # 单批逐根 pass/fail
 ├── master_manifest.csv       # 累计数据库

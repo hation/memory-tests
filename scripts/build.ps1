@@ -194,7 +194,7 @@ if ($Zip) {
         exit 1
     }
     # 结果目录保留在包内（空目录也留条目，对齐 disk-tests 保留 logs/results）
-    $resDir = Join-Path $KitDir 'memory_results'
+    $resDir = Join-Path $KitDir 'results'
     if (-not (Test-Path -LiteralPath $resDir)) { New-Item -ItemType Directory -Path $resDir | Out-Null }
 
     if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }

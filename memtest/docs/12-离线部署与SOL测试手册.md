@@ -1,4 +1,4 @@
-# 12 · 离线部署与 SOL 测试手册
+﻿# 12 · 离线部署与 SOL 测试手册
 
 > 状态：[当前有效]（2026-10-22）
 > 变更记录：2026-10-22 创建
@@ -23,7 +23,7 @@
    ├── db\              SQLite 历史库（可选，需 Python 3）
    ├── conf\ / config\  配置文件与批次/预期清单模板
    ├── docs\            文档（01-13）
-   ├── memory_results\  结果目录（首次运行自动创建）
+   ├── results\  结果目录（首次运行自动创建）
    └── VERSION / CHECKSUM.txt / README.md
    ```
 
@@ -76,7 +76,7 @@ cd C:\memtest\scripts
 ### 1.5 结果在哪
 
 ```
-C:\memtest\memory_results\
+C:\memtest\results\
 ├── reports\<批次>-report.csv     # 单批逐根 pass/fail
 ├── master_manifest.csv           # 累计总表
 ├── assessment\<机名>-assessment.csv/.txt   # 能力评估
@@ -133,7 +133,7 @@ cd C:\memtest\scripts
 
 ### 2.3 产物
 
-`scripts\memory_results\assessment\`：
+`results\assessment\`：
 - `srv01-assessment.csv` —— Item/Name/Status/建议动作
 - `srv01-assessment.txt` —— 汇总 + 下一步 SOL 命令
 
@@ -180,7 +180,7 @@ log=ttyS0,115200 maxpasses=4
 ### 3.5 报告位置
 
 ```
-scripts\memory_results\
+results\
 ├── reports\srv01-a1-report.csv    # 单批逐根 pass/fail
 ├── master_manifest.csv            # 累计总表
 └── raw\srv01-a1.mtlog.txt         # 原始 MTLOG

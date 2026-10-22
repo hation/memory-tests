@@ -19,3 +19,6 @@ __pycache__/
 
 # SDD 工作区（git-ignored scratch）
 .superpowers/
+
+# 测试结果输出（与 scripts 平级的独立目录）
+results/

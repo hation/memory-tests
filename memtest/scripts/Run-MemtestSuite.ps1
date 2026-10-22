@@ -13,7 +13,7 @@
 #   .\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod USB -UsbDrive E: -MaxPasses 4
 #   .\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod USB -UsbDrive E: -UsbReportPrefix "MT86P_*" -MaxPasses 4
 #   .\Run-MemtestSuite.ps1 -BatchName batch01 -BootMethod EFI -EfiImage D:\mt86plus.efi -MaxPasses 4 -ConfirmSwitch
-#   .\Run-MemtestSuite.ps1 -ParseOnly -LogFile .\memory_results\raw\mtlog.txt -BatchName batch01
+#   .\Run-MemtestSuite.ps1 -ParseOnly -LogFile .\results\raw\mtlog.txt -BatchName batch01
 #
 # 依赖（可选）：
 #   - SOL 方式需 ipmitool.exe（Windows 版）或厂商 SOL 工具，位于 PATH 或 -IpmiTool 指定
@@ -106,7 +106,7 @@ Memtest86+ 自动化编排与压测报告汇总工具
   -MonitorTemp    读取 IPMI 温度传感器（仅 SOL 方式）
   -RestartLoop    断电-上电循环次数（仅 SOL 方式，建议从控制机运行）
   输出：
-  -LogPath        输出目录（默认 .\memory_results\）
+  -LogPath        输出目录（默认 <包根>\results\）
   -ParseOnly     仅解析模式：配合 -LogFile 解析已有日志/报告
   -ConfirmSwitch  确认允许执行引导/重启/断电操作
 用法示例：
@@ -114,12 +114,12 @@ Memtest86+ 自动化编排与压测报告汇总工具
   .\Run-MemtestSuite.ps1 -BootMethod Serial -SerialPort COM1 -BaudRate 115200 -MaxPasses 4
   .\Run-MemtestSuite.ps1 -BootMethod USB -UsbDrive E: -MaxPasses 4
   .\Run-MemtestSuite.ps1 -BootMethod EFI -EfiImage D:\mt86plus.efi -MaxPasses 4 -ConfirmSwitch
-  .\Run-MemtestSuite.ps1 -ParseOnly -LogFile .\memory_results\raw\mtlog.txt
+  .\Run-MemtestSuite.ps1 -ParseOnly -LogFile .\results\raw\mtlog.txt
 "@
     exit 0
 }
 
-if ($LogPath -eq "") { $LogPath = Join-Path $PSScriptRoot "memory_results" }
+if ($LogPath -eq "") { $LogPath = Join-Path (Split-Path -Parent $PSScriptRoot) "results" }
 $rawDir   = Join-Path $LogPath "raw"
 $reportDir = Join-Path $LogPath "reports"
 foreach ($d in @($LogPath, $rawDir, $reportDir)) {

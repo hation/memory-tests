@@ -1,7 +1,7 @@
 ﻿# ============================================================================
 # Identify-Memory.ps1
 # 用途：智能识别当前电脑所有内存槽位上的 DDR5 内存条，自动采集 SPD 信息并分类，
-#       输出带时间戳的批次清单 CSV（memory_results\<批次>.csv），供批量验收使用。
+#       输出带时间戳的批次清单 CSV（<包根>\results\<批次>.csv），供批量验收使用。
 #
 # 用法：
 #   .\Identify-Memory.ps1 -BatchName "batch01"
@@ -24,7 +24,7 @@ $ErrorActionPreference = 'Stop'
 . $PSScriptRoot\lib_common.ps1
 
 # ---------- 输出目录 ----------
-$outDir = Join-Path $PSScriptRoot "memory_results"
+$outDir = Join-Path (Split-Path -Parent $PSScriptRoot) "results"
 if (-not (Test-Path $outDir)) {
     New-Item -ItemType Directory -Path $outDir | Out-Null
 }

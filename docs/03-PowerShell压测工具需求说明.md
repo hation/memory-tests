@@ -1,4 +1,4 @@
-# Memtest86+ 自动化编排与压测报告汇总工具（Windows PowerShell）需求说明
+﻿# Memtest86+ 自动化编排与压测报告汇总工具（Windows PowerShell）需求说明
 
 > 状态：[当前有效]（2026-10-22）
 > 变更记录：2026-10-22 文档体系编号化（对齐 disk-tests）；工程基建优化更新
@@ -122,7 +122,7 @@
 | `-ExpectedCsv` | string | — | 预期清单（FR-1 匹配用） |
 | `-MonitorEcc` | switch | off | 是否同时监控 WHEA/ECC |
 | `-RestartLoop` | int | 0 | 批次切换重启循环次数 |
-| `-LogPath` | string | `.\memory_results\` | 输出目录 |
+| `-LogPath` | string | `.\results\` | 输出目录 |
 | `-ConfirmSwitch` | switch | off | 确认允许执行引导/重启操作 |
 | `-Help` | switch | off | 打印参数说明 |
 

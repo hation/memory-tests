@@ -38,7 +38,7 @@ if ($Help) {
 参数：
   -ManifestCsv      批次清单 CSV（必填）
   -SuiteScript      Run-MemtestSuite.ps1 路径（默认与本脚本同目录）
-  -LogPath          输出目录（默认 .\memory_results\，清单行内 LogPath 可覆盖）
+  -LogPath          输出目录（默认 <包根>\results\，清单行内 LogPath 可覆盖）
   -DryRun           只打印将执行的命令，不真正运行
   -ContinueOnError  某批失败继续下一批（默认遇错停止）
   -Help             打印本帮助
@@ -56,7 +56,7 @@ if ($ManifestCsv -eq "") { Write-Error "缺少必填参数 -ManifestCsv"; exit 1
 if (-not (Test-Path $ManifestCsv)) { Write-Error "批次清单不存在: $ManifestCsv"; exit 1 }
 if ($SuiteScript -eq "") { $SuiteScript = Join-Path $PSScriptRoot "Run-MemtestSuite.ps1" }
 if (-not (Test-Path $SuiteScript)) { Write-Error "编排脚本不存在: $SuiteScript"; exit 1 }
-if ($LogPath -eq "") { $LogPath = Join-Path $PSScriptRoot "memory_results" }
+if ($LogPath -eq "") { $LogPath = Join-Path (Split-Path -Parent $PSScriptRoot) "results" }
 if (-not (Test-Path $LogPath)) { New-Item -ItemType Directory -Path $LogPath -Force | Out-Null }
 
 # 健壮 CSV 读取已上移共享库（Read-CsvManifest，.NET TextFieldParser，保留行尾空字段）

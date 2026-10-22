@@ -15,7 +15,7 @@ param(
     [string]$BmcPass = "",
     [string]$IpmiTool = "ipmitool",
     [string]$MachineName = "",   # 报告命名用（缺省：本机名 或 BMC IP）
-    [string]$OutDir = "",        # 输出目录（缺省 <脚本目录>\memory_results\assessment）
+    [string]$OutDir = "",        # 输出目录（缺省 <包根>\results\assessment）
     [string]$CapScript = "",     # Check-ServerCapabilities.ps1 路径（缺省同目录）
     [switch]$Help
 )
@@ -34,7 +34,7 @@ if ($Help) {
 参数：
   -Local/-BmcHost/-BmcUser/-BmcPass  同 Check-ServerCapabilities.ps1
   -MachineName  报告命名（缺省：本机名 或 BMC IP）
-  -OutDir       输出目录（缺省 memory_results\assessment）
+  -OutDir       输出目录（缺省 <包根>\results\assessment）
   -CapScript    探测脚本路径（缺省同目录 Check-ServerCapabilities.ps1）
 输出：<MachineName>-assessment.csv（Item/Name/Status/建议动作）+ 汇总文本
 "@
@@ -44,7 +44,7 @@ if ($Help) {
 # ---- 默认值解析 ----
 if ($CapScript -eq "") { $CapScript = Join-Path $PSScriptRoot "Check-ServerCapabilities.ps1" }
 if (-not (Test-Path -LiteralPath $CapScript)) { Write-Error "探测脚本不存在: $CapScript"; exit 1 }
-if ($OutDir -eq "") { $OutDir = Join-Path $PSScriptRoot "memory_results\assessment" }
+if ($OutDir -eq "") { $OutDir = Join-Path (Split-Path -Parent $PSScriptRoot) "results\assessment" }
 if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
 if ($MachineName -eq "") {
     $MachineName = if ($BmcHost -ne "") { $BmcHost } else { $env:COMPUTERNAME }

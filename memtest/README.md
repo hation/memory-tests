@@ -1,4 +1,4 @@
-﻿> 工具版本：v5
+﻿> 工具版本：v6
 # SOL 内存测试离线包（Memtest86+ 全自动验收）
 
 基于 Windows PowerShell 的 **DDR5 内存条 SOL 全自动验收工具包**。编排器远程引导 Memtest86+、抓取 MTLOG 日志、解析并汇总成逐根可追溯的压测报告。
@@ -89,18 +89,18 @@ cd scripts
 
 ### 第 4 步：查看报告
 
-默认输出在 `scripts\memory_results\`；建议统一用 `-LogPath` 指到 `output\` 目录（批量调度用 `-LogPath` 参数），例如：
+默认输出在 `results\`；建议统一用 `-LogPath` 指到 `output\` 目录（批量调度用 `-LogPath` 参数），例如：
 
 ```powershell
-.\scripts\Run-MemtestSuite.ps1 ... -LogPath .\output\memory_results
-.\scripts\Run-BatchScheduler.ps1 -ManifestCsv ... -LogPath .\output\memory_results
+.\scripts\Run-MemtestSuite.ps1 ... -LogPath .\results
+.\scripts\Run-BatchScheduler.ps1 -ManifestCsv ... -LogPath .\results
 ```
 
 输出文件：
-- `memory_results\reports\<批次>-report.csv` —— 每批逐根 pass/fail
-- `memory_results\all-batches-report-*.csv` —— 1000 根全量总表
-- `memory_results\master_manifest.csv` —— 累计数据库
-- `memory_results\raw\` —— 原始 MTLOG/报告备份
+- `results\reports\<批次>-report.csv` —— 每批逐根 pass/fail
+- `results\all-batches-report-*.csv` —— 1000 根全量总表
+- `results\master_manifest.csv` —— 累计数据库
+- `results\raw\` —— 原始 MTLOG/报告备份
 
 ---
 
