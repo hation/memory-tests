@@ -322,7 +322,7 @@ function Write-Log {
 function ConvertTo-CsvField {
     param([object]$Value)
     $s = if ($null -eq $Value) { "" } else { [string]$Value }
-    if ($s -match '[",`r`n]') {
+    if ($s -match '[",\r\n]') {
         $s = '"' + ($s -replace '"', '""') + '"'
     }
     return $s
