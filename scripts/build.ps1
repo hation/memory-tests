@@ -13,9 +13,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# 默认 KitDir = <repo>\SOL内存测试离线包（$PSScriptRoot 不能在 param 默认值中使用）
+# 默认 KitDir = <repo>\memtest（$PSScriptRoot 不能在 param 默认值中使用）
 if ([string]::IsNullOrEmpty($KitDir)) {
-    $KitDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'SOL内存测试离线包'
+    $KitDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'memtest'
 }
 
 $Repo = Split-Path -Parent $PSScriptRoot   # <repo> 根目录（scripts 的父目录）
