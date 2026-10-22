@@ -28,6 +28,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# 共享库（识别/解析等公共逻辑，入库后统一抽取到 lib_common.ps1）
+. $PSScriptRoot\lib_common.ps1
+
 if ($Help) {
     Write-Host @"
 批量批次调度器
@@ -56,35 +59,9 @@ if (-not (Test-Path $SuiteScript)) { Write-Error "编排脚本不存在: $SuiteS
 if ($LogPath -eq "") { $LogPath = Join-Path $PSScriptRoot "memory_results" }
 if (-not (Test-Path $LogPath)) { New-Item -ItemType Directory -Path $LogPath -Force | Out-Null }
 
-# 健壮 CSV 读取：用 .NET TextFieldParser，正确处理带引号的逗号、且保留行尾空字段
-# （PS 5.1 的 Import-Csv 会丢弃行尾逗号的空字段，导致列错位）
-function Read-ManifestRows {
-    param([string]$Path)
+# 健壮 CSV 读取已上移共享库（Read-CsvManifest，.NET TextFieldParser，保留行尾空字段）
 
-    Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction SilentlyContinue
-    $parser = New-Object Microsoft.VisualBasic.FileIO.TextFieldParser($Path)
-    $parser.TextFieldType = 'Delimited'
-    $parser.SetDelimiters(',')
-    $parser.HasFieldsEnclosedInQuotes = $true
-
-    try {
-        $headers = $parser.ReadFields() | ForEach-Object { $_.Trim() }
-        $rows = @()
-        while (-not $parser.EndOfData) {
-            $vals = $parser.ReadFields()
-            $obj = [ordered]@{}
-            for ($c = 0; $c -lt $headers.Count; $c++) {
-                $obj[$headers[$c]] = if ($c -lt $vals.Count) { $vals[$c].Trim() } else { "" }
-            }
-            $rows += [PSCustomObject]$obj
-        }
-    } finally {
-        $parser.Close()
-    }
-    return $rows
-}
-
-$batches = Read-ManifestRows -Path $ManifestCsv
+$batches = Read-CsvManifest -Path $ManifestCsv
 if ($batches.Count -eq 0) { Write-Error "批次清单为空"; exit 1 }
 
 $summary = @()

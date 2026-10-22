@@ -1,0 +1,394 @@
+﻿# ============================================================================
+# lib_common.ps1 — 共享库（脚本入库后公共逻辑抽取）
+# 定位：DDR5 内存条 SOL 验收工具公共函数库（识别 / 解析 / 通用工具）。
+#       本文件只提供可复用函数，禁止包含任何业务主流程逻辑。
+# 依赖：PowerShell 5.1；由各脚本在 param 之后 dot-source 加载（. $PSScriptRoot\lib_common.ps1）。
+#
+# 函数清单：
+#   Get-MemoryInventory      识别本机内存条并匹配预期清单
+#   Parse-KvPairs            健壮 key=value 分词器
+#   Invoke-MtlogParser       解析 MTLOG 串口日志
+#   Invoke-TextReportParser  解析 USB 导出文本报告
+#   Read-CsvManifest         健壮 CSV 读取（.NET TextFieldParser，保留行尾空字段）
+#   Write-Event              向 stdout 输出一行 JSON 事件
+#   Get-AppVersion           读取 VERSION（缺失回退 v0-dev）
+#   Write-Log                时间戳日志输出 [HH:mm:ss] LEVEL msg
+#   ConvertTo-CsvField       CSV 字段转义（含逗号/引号/换行加引号）
+#   Confirm-Targets          打印目标清单并要求 y 确认（业务占位骨架）
+#   Get-StageDone / Set-StageDone  .done 阶段标记读写
+#   Wait-Slot                并发槽位信号量（骨架）
+#   Get-SystemEvents         WHEA 内存相关系统事件（近 HoursBack 小时）
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# FR-1 智能识别与建档（复用 Identify-Memory.ps1 逻辑）
+# ----------------------------------------------------------------------------
+function Get-MemoryInventory {
+    param([string]$ExpectedCsv, [string]$BatchName)
+
+    $memSticks = Get-CimInstance -ClassName Win32_PhysicalMemory
+    if (-not $memSticks) {
+        Write-Warning "未读取到内存信息，请确认内存已安装。"
+        return @()
+    }
+
+    $expected = @()
+    if ($ExpectedCsv -ne "" -and (Test-Path $ExpectedCsv)) {
+        $expected = Import-Csv -Path $ExpectedCsv
+    }
+
+    $rows = @()
+    foreach ($m in $memSticks) {
+        $capGB   = if ($m.Capacity) { [math]::Round($m.Capacity / 1GB, 0) } else { 0 }
+        $memType = switch ($m.SMBIOSMemoryType) {
+            24 { "DDR3" }
+            26 { "DDR4" }
+            34 { "DDR5" }
+            35 { "LPDDR5" }
+            36 { "LPDDR5X" }
+            default { "Type$($m.SMBIOSMemoryType)" }
+        }
+        $serial = ($m.SerialNumber -replace '^0+', '').Trim()
+        if ($serial -eq "") { $serial = "UNKNOWN" }
+        $pn = ($m.PartNumber -replace '\s', '').Trim()
+
+        $issues = @()
+        if ($memType -ne "DDR5") { $issues += "非DDR5($memType)" }
+        if ($serial -eq "UNKNOWN") { $issues += "SPD无序列号" }
+        if ($pn -eq "") { $issues += "SPD无型号" }
+        if ($capGB -eq 0) { $issues += "容量读取异常" }
+
+        $matchState = "未提供预期清单"
+        if ($expected.Count -gt 0 -and $serial -ne "UNKNOWN") {
+            $found = $expected | Where-Object { $_.SerialNumber -eq $serial }
+            if ($found) {
+                $matchState = "匹配"
+                if ($found.Capacity -and ([int]$found.Capacity -ne $capGB)) {
+                    $issues += "容量与预期不符"
+                }
+            } else {
+                $matchState = "不在清单中"
+                $issues += "不在预期清单"
+            }
+        }
+
+        $rows += [PSCustomObject]@{
+            Batch        = $BatchName
+            Slot         = $m.DeviceLocator
+            BankLabel    = $m.BankLabel
+            SerialNumber = $serial
+            PartNumber   = $pn
+            Manufacturer = $m.Manufacturer
+            CapacityGB   = $capGB
+            SpeedMTs     = $m.Speed
+            MemType      = $memType
+            MatchState   = $matchState
+            Issues       = ($issues -join "; ")
+            Status       = if ($issues.Count -eq 0) { "正常" } else { "待复核" }
+        }
+    }
+    return $rows
+}
+
+# ----------------------------------------------------------------------------
+# FR-3/FR-4 日志捕获与解析
+# ----------------------------------------------------------------------------
+
+# 健壮的 key=value 分词器（支持带空格的引号值）
+function Parse-KvPairs {
+    param([string]$text)
+
+    $map = @{}
+    $len = $text.Length
+    $i = 0
+    while ($i -lt $len) {
+        while ($i -lt $len -and [char]::IsWhiteSpace($text[$i])) { $i++ }
+        if ($i -ge $len) { break }
+        $start = $i
+        while ($i -lt $len -and $text[$i] -ne '=' -and -not [char]::IsWhiteSpace($text[$i])) { $i++ }
+        $key = $text.Substring($start, $i - $start)
+        if ($i -lt $len -and $text[$i] -eq '=') {
+            $i++
+            if ($i -lt $len -and $text[$i] -eq '"') {
+                $i++
+                $vstart = $i
+                while ($i -lt $len -and $text[$i] -ne '"') { $i++ }
+                $val = $text.Substring($vstart, $i - $vstart)
+                if ($i -lt $len) { $i++ }
+            } else {
+                $vstart = $i
+                while ($i -lt $len -and -not [char]::IsWhiteSpace($text[$i])) { $i++ }
+                $val = $text.Substring($vstart, $i - $vstart)
+            }
+            $map[$key] = $val
+        }
+    }
+    return $map
+}
+
+# 解析 MTLOG 串口日志（格式：MTLOG ts=<sec>.<dsec> ev=<event> key=value ...）
+function Invoke-MtlogParser {
+    param([string]$LogFile)
+
+    if (-not (Test-Path $LogFile)) {
+        throw "日志文件不存在: $LogFile"
+    }
+
+    $summary = [PSCustomObject]@{
+        PassesCompleted = 0
+        Errors          = 0
+        EccErrors       = 0
+        FinalStatus     = "INCOMPLETE"
+        Events          = @()
+        ErrorDetails    = @()
+        SpdInfo         = @()
+        SystemInfo      = ""
+    }
+
+    foreach ($line in Get-Content -Path $LogFile -Encoding UTF8) {
+        if ($line -notmatch '^MTLOG\s+ts=([\d.]+)\s+ev=(\S+)') { continue }
+
+        $event  = $matches[2]
+        $ts     = $matches[1]
+        $rest   = ($line -split ' ev=', 2)[1]
+        $fields = @{}
+        if ($null -ne $rest) {
+            $fields = Parse-KvPairs -text ($rest -replace '^[^ ]+\s*', '')  # 去掉行首事件名
+        }
+        $fields['ts'] = $ts   # 补上时间戳，供事件记录使用
+
+        switch ($event) {
+            "start" {
+                $summary.Events += [PSCustomObject]@{ ts = $fields.ts; ev = $event; desc = "Memtest86+ 启动 (v$($fields.version))" }
+            }
+            "info" {
+                $summary.SystemInfo = "CPU=$($fields.cpu); Board=$($fields.board); MemMB=$($fields.mem_mb); IMC=$($fields.imc)-$($fields.cas)"
+            }
+            "spd" {
+                $summary.SpdInfo += [PSCustomObject]@{
+                    Slot    = $fields.slot
+                    SizeMB  = $fields.size_mb
+                    Type    = $fields.type
+                    Freq    = $fields.freq
+                    Ecc     = $fields.ecc
+                    Mfg     = $fields.mfg
+                    Sku     = $fields.sku
+                }
+            }
+            "pass_start" {
+                $summary.Events += [PSCustomObject]@{ ts = $fields.ts; ev = $event; desc = "第 $($fields.pass) 轮开始" }
+            }
+            "pass_end" {
+                $summary.Events += [PSCustomObject]@{ ts = $fields.ts; ev = $event; desc = "第 $($fields.pass) 轮结束，errors=$($fields.errors)" }
+                $summary.Errors = [int64]$fields.errors
+                if ($summary.PassesCompleted -lt ([int64]$fields.pass + 1)) {
+                    $summary.PassesCompleted = [int64]$fields.pass + 1
+                }
+                if ($fields.status -eq "pass") { $summary.FinalStatus = "PASS" }
+                elseif ($fields.status -eq "fail") { $summary.FinalStatus = "FAIL" }
+            }
+            "test_start" {
+                $summary.Events += [PSCustomObject]@{ ts = $fields.ts; ev = $event; desc = "测试 $($fields.test) 开始: $($fields.name)" }
+            }
+            "test_end" {
+                $summary.Events += [PSCustomObject]@{ ts = $fields.ts; ev = $event; desc = "测试 $($fields.test) 结束，errors=$($fields.errors)" }
+            }
+            "done" {
+                $summary.Events += [PSCustomObject]@{ ts = $fields.ts; ev = $event; desc = "完成，passes=$($fields.passes)，status=$($fields.status)" }
+                $summary.PassesCompleted = [int64]$fields.passes
+                if ($fields.status -eq "pass") { $summary.FinalStatus = "PASS" }
+                elseif ($fields.status -eq "fail") { $summary.FinalStatus = "FAIL" }
+            }
+            "addr" { $summary.ErrorDetails += [PSCustomObject]@{ Type = $event; Fields = $fields } }
+            "data" { $summary.ErrorDetails += [PSCustomObject]@{ Type = $event; Fields = $fields } }
+            "parity" { $summary.ErrorDetails += [PSCustomObject]@{ Type = $event; Fields = $fields } }
+            "uecc" { $summary.ErrorDetails += [PSCustomObject]@{ Type = $event; Fields = $fields } }
+            "ecc" { $summary.ErrorDetails += [PSCustomObject]@{ Type = $event; Fields = $fields } }
+            default {
+                $summary.Events += [PSCustomObject]@{ ts = $fields.ts; ev = $event; desc = ($fields | Out-String).Trim() }
+            }
+        }
+    }
+    return $summary
+}
+
+# 解析 USB 导出的文本报告（"Memtest86+ v... Report"，含 Final Result / Passes completed / Errors）
+function Invoke-TextReportParser {
+    param([string]$ReportFile)
+
+    if (-not (Test-Path $ReportFile)) {
+        throw "报告文件不存在: $ReportFile"
+    }
+
+    $content = Get-Content -Path $ReportFile -Encoding UTF8
+    $summary = [PSCustomObject]@{
+        PassesCompleted = 0
+        Errors          = 0
+        EccErrors       = 0
+        FinalStatus     = "INCOMPLETE"
+        PerTest         = @()
+        SpdInfo         = @()
+        SystemInfo      = ""
+    }
+
+    foreach ($line in $content) {
+        if ($line -match '^  Test\s+(\d+):.*Errors:\s*(\d+)') {
+            $summary.PerTest += [PSCustomObject]@{ Test = [int]$matches[1]; Errors = [int64]$matches[2] }
+        }
+        elseif ($line -match 'Passes completed:\s+(\d+)') {
+            $summary.PassesCompleted = [int64]$matches[1]
+        }
+        elseif ($line -match 'Errors:\s+(\d+)') {
+            $summary.Errors = [int64]$matches[1]
+        }
+        elseif ($line -match 'ECC Errors:\s+(\d+)') {
+            $summary.EccErrors = [int64]$matches[1]
+        }
+        elseif ($line -match 'Final Result:\s*(PASS|FAIL|In progress)') {
+            switch ($matches[1]) {
+                "PASS" { $summary.FinalStatus = "PASS" }
+                "FAIL" { $summary.FinalStatus = "FAIL" }
+                default { $summary.FinalStatus = "INCOMPLETE" }
+            }
+        }
+        elseif ($line -match '^  Slot\s+(\d+):\s+(\d+) MB (.+)$') {
+            $summary.SpdInfo += [PSCustomObject]@{ Slot = [int]$matches[1]; SizeMB = [int64]$matches[2]; Detail = $matches[3] }
+        }
+        elseif ($line -match '^CPU:\s*(.+)$') {
+            $summary.SystemInfo = "CPU=$($matches[1])"
+        }
+        elseif ($line -match '^Motherboard:\s*(.+)$') {
+            $summary.SystemInfo += "; Board=$($matches[1])"
+        }
+    }
+    return $summary
+}
+
+# ----------------------------------------------------------------------------
+# 通用工具函数
+# ----------------------------------------------------------------------------
+
+# 健壮 CSV 读取：用 .NET TextFieldParser，正确处理带引号的逗号、且保留行尾空字段
+# （PS 5.1 的 Import-Csv 会丢弃行尾逗号的空字段，导致列错位）
+function Read-CsvManifest {
+    param([string]$Path)
+
+    Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction SilentlyContinue
+    $parser = New-Object Microsoft.VisualBasic.FileIO.TextFieldParser($Path)
+    $parser.TextFieldType = 'Delimited'
+    $parser.SetDelimiters(',')
+    $parser.HasFieldsEnclosedInQuotes = $true
+
+    try {
+        $headers = $parser.ReadFields() | ForEach-Object { $_.Trim() }
+        $rows = @()
+        while (-not $parser.EndOfData) {
+            $vals = $parser.ReadFields()
+            $obj = [ordered]@{}
+            for ($c = 0; $c -lt $headers.Count; $c++) {
+                $obj[$headers[$c]] = if ($c -lt $vals.Count) { $vals[$c].Trim() } else { "" }
+            }
+            $rows += [PSCustomObject]$obj
+        }
+    } finally {
+        $parser.Close()
+    }
+    return $rows
+}
+
+# 向 stdout 输出一行 JSON 事件 {"type":...,"data":{...}}（供外部工具消费）
+function Write-Event {
+    param([string]$Type, [hashtable]$Data)
+    [PSCustomObject]@{ type = $Type; data = $Data } | ConvertTo-Json -Compress
+}
+
+# 读取应用版本：$PSScriptRoot\..\VERSION（trim），缺失回退 v0-dev
+function Get-AppVersion {
+    $vFile = Join-Path $PSScriptRoot "..\VERSION"
+    if (Test-Path $vFile) {
+        $v = (Get-Content -Path $vFile -Raw).Trim()
+        if ($v -ne "") { return $v }
+    }
+    return "v0-dev"
+}
+
+# 时间戳日志输出：[HH:mm:ss] LEVEL msg
+function Write-Log {
+    param([string]$Msg, [string]$Level = "INFO")
+    Write-Host ("[{0}] {1} {2}" -f (Get-Date -Format "HH:mm:ss"), $Level, $Msg)
+}
+
+# CSV 字段转义：含逗号/引号/换行时加引号并把内部引号翻倍
+function ConvertTo-CsvField {
+    param([object]$Value)
+    $s = if ($null -eq $Value) { "" } else { [string]$Value }
+    if ($s -match '[",`r`n]') {
+        $s = '"' + ($s -replace '"', '""') + '"'
+    }
+    return $s
+}
+
+# 打印目标清单，默认要求输入 y 确认（业务占位骨架）
+function Confirm-Targets {
+    param([array]$Targets, [switch]$SkipConfirm)
+
+    if ($Targets -and $Targets.Count -gt 0) {
+        Write-Host "目标清单："
+        foreach ($t in $Targets) { Write-Host "  - $t" }
+    }
+    if ($SkipConfirm) { return $true }
+    $ans = Read-Host "是否确认继续？输入 y 确认"
+    return ($ans.Trim().ToLower() -eq "y")
+}
+
+# .done 阶段标记读取
+function Get-StageDone {
+    param([string]$Dir, [string]$Stage)
+    return (Test-Path (Join-Path $Dir "$Stage.done"))
+}
+
+# .done 阶段标记写入
+function Set-StageDone {
+    param([string]$Dir, [string]$Stage)
+    New-Item -ItemType File -Path (Join-Path $Dir "$Stage.done") -Force | Out-Null
+}
+
+# 并发槽位信号量（骨架）：进程内计数等待。
+# 简化实现：并发占用数达到 MaxSlots 时轮询等待；由调用方在批次结束后递减
+# $script:SlotUsage 释放槽位。跨进程/Job 并发需用 Runspace 信号量（后续任务完善）。
+$script:SlotUsage = 0
+function Wait-Slot {
+    param([int]$MaxSlots = 1)
+
+    if ($MaxSlots -lt 1) { $MaxSlots = 1 }
+    while ($script:SlotUsage -ge $MaxSlots) {
+        Start-Sleep -Milliseconds 500
+    }
+    $script:SlotUsage++
+}
+
+# ----------------------------------------------------------------------------
+# FR-7 WHEA/ECC 监控（原 Get-WheaMemoryErrors 逻辑搬入改名）
+# ----------------------------------------------------------------------------
+function Get-SystemEvents {
+    param([int]$HoursBack = 24)
+
+    $errs = @()
+    try {
+        $errs = Get-WinEvent -FilterHashtable @{
+            LogName = 'Microsoft-Windows-WHEA-Logger/Operational'
+            StartTime = (Get-Date).AddHours(-$HoursBack)
+        } -ErrorAction SilentlyContinue |
+            Where-Object { $_.Id -in @(18, 19, 47, 155, 160, 0xBC) } |
+            ForEach-Object {
+                [PSCustomObject]@{
+                    Time     = $_.TimeCreated
+                    Id       = $_.Id
+                    Level    = $_.LevelDisplayName
+                    Provider = $_.ProviderName
+                    Message  = ($_.Message -replace "`r`n", " ")
+                }
+            }
+    } catch {}
+    return $errs
+}
