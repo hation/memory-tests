@@ -67,7 +67,8 @@ $scriptFiles = @(
     'Run-BatchScheduler.ps1',
     'Run-MemtestSuite.ps1',
     'Check-ServerCapabilities.ps1',
-    'Run-ServerAssessment.ps1'
+    'Run-ServerAssessment.ps1',
+    'check_env.ps1'
 )
 Sync-Dir -Src $scriptSrc -Dst $scriptDst -Exclude @('build.ps1')
 foreach ($f in $scriptFiles) {
@@ -106,14 +107,14 @@ $verLine = "> 工具版本：$ver"
 # KitDir\VERSION
 [System.IO.File]::WriteAllText((Join-Path $KitDir 'VERSION'), $ver, $utf8NoBom)
 
-# KitDir\README.md：幂等注入版本行（已存在该行则先删除再插入到文件开头）
+# KitDir\README.md：幂等注入版本行（删除所有旧版本行（v1/v2/...）再插入当前版本行，避免叠加）
 # 内容层幂等：TrimEnd 去除末尾换行/空行，避免 -split 产生尾随空元素在尾部累积空行
 # 写回带 BOM（UTF8-BOM）：README 为中文内容，PS5 读取无 BOM UTF-8 中文可能乱码
 $readmePath = Join-Path $KitDir 'README.md'
 if (Test-Path -LiteralPath $readmePath) {
     $raw = [System.IO.File]::ReadAllText($readmePath, $utf8NoBom).TrimEnd("`r", "`n")
     $lines = $raw -split "`r?`n"
-    $filtered = @($lines | Where-Object { $_ -ne $verLine })
+    $filtered = @($lines | Where-Object { $_ -notmatch '^>\s*工具版本：' })
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine($verLine)
     foreach ($l in $filtered) { [void]$sb.AppendLine($l) }
