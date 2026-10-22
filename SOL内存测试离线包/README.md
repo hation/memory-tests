@@ -37,7 +37,7 @@ SOL内存测试离线包/
 | 组件 | 离线状态 | 说明 |
 | --- | --- | --- |
 | 编排脚本 ×3 | ✅ 已含 | PowerShell 5.1 原生可跑 |
-| Memtest86+ v9.00 ISO | ✅ 已含 | 6.2MB，官方 memtest.org 下载 |
+| Memtest86+ v9.00 ISO | ✅ 已内置 | `boot\memtest.iso`（6.2MB，无需下载） |
 | Memtest86+ binaries | ✅ 已含 | x86_64 等架构 EFI 负载 |
 | **ipmitool.exe** | ✅ **已内置** | Windows 版 1.8.18（含依赖 DLL），`tools\ipmitool\`，免联网免配置 |
 | 文档 ×5 | ✅ 已含 | 含 SOL/Serial 使用指南 |
