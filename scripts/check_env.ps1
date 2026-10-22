@@ -23,7 +23,7 @@ if ($psv.Major -ge 5 -and ($psv.Major -gt 5 -or $psv.Minor -ge 1)) {
 }
 
 # [2] 关键脚本齐全
-$scripts = @('lib_common.ps1','Identify-Memory.ps1','Run-MemtestSuite.ps1','Run-BatchScheduler.ps1','Check-ServerCapabilities.ps1','Run-ServerAssessment.ps1')
+$scripts = @('lib_common.ps1','Identify-Memory.ps1','Run-MemtestSuite.ps1','Run-BatchScheduler.ps1','Check-ServerCapabilities.ps1','Run-ServerAssessment.ps1','Diag-Bmc.ps1')
 $missing = @($scripts | Where-Object { -not (Test-Path (Join-Path $PSScriptRoot $_)) })
 if ($missing.Count -eq 0) {
     Write-Host "[2] 脚本 $($scripts.Count) 个 ... OK"
