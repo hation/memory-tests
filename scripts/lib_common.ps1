@@ -65,7 +65,7 @@ function Get-MemoryInventory {
             if ($found) {
                 $matchState = "匹配"
                 if ($found.Capacity -and ([int]$found.Capacity -ne $capGB)) {
-                    $issues += "容量与预期不符"
+                    $issues += "容量与预期不符(预期$($found.Capacity)GB/实际${capGB}GB)"
                 }
             } else {
                 $matchState = "不在清单中"
@@ -294,7 +294,8 @@ function Read-CsvManifest {
     } finally {
         $parser.Close()
     }
-    return $rows
+    # 用 @() 包裹保证单行清单也返回数组（PS5.1 标量语义下调用方 .Count 可靠）
+    return @($rows)
 }
 
 # 向 stdout 输出一行 JSON 事件 {"type":...,"data":{...}}（供外部工具消费）
@@ -303,12 +304,15 @@ function Write-Event {
     [PSCustomObject]@{ type = $Type; data = $Data } | ConvertTo-Json -Compress
 }
 
-# 读取应用版本：$PSScriptRoot\..\VERSION（trim），缺失回退 v0-dev
+# 读取应用版本：$PSScriptRoot\..\VERSION（trim），缺失回退 v0-dev。
+# 结果缓存到 script 级变量，避免逐行/逐对象重复读盘。
+$script:AppVersion = $null
 function Get-AppVersion {
+    if ($null -ne $script:AppVersion) { return $script:AppVersion }
     $vFile = Join-Path $PSScriptRoot "..\VERSION"
     if (Test-Path $vFile) {
         $v = (Get-Content -Path $vFile -Raw).Trim()
-        if ($v -ne "") { return $v }
+        if ($v -ne "") { $script:AppVersion = $v; return $v }
     }
     return "v0-dev"
 }
@@ -379,9 +383,8 @@ function Set-StageDone {
     New-Item -ItemType File -Path (Join-Path $Dir "$Stage.done") -Force | Out-Null
 }
 
-# 并发槽位信号量（骨架）：进程内计数等待。
-# 简化实现：并发占用数达到 MaxSlots 时轮询等待；由调用方在批次结束后递减
-# $script:SlotUsage 释放槽位。跨进程/Job 并发需用 Runspace 信号量（后续任务完善）。
+# 并发槽位信号量（骨架）：进程内计数等待，配 Release-Slot 释放。
+# 简化实现：并发占用数达到 MaxSlots 时轮询等待。跨进程/Job 并发需用 Runspace 信号量（后续任务完善）。
 $script:SlotUsage = 0
 function Wait-Slot {
     param([int]$MaxSlots = 1)
@@ -391,6 +394,11 @@ function Wait-Slot {
         Start-Sleep -Milliseconds 500
     }
     $script:SlotUsage++
+}
+
+# 释放一个并发槽位（与 Wait-Slot 成对调用；未占用时调用不报错）
+function Release-Slot {
+    if ($script:SlotUsage -gt 0) { $script:SlotUsage-- }
 }
 
 # ----------------------------------------------------------------------------
