@@ -23,4 +23,17 @@ Assert ($cfg.PARALLEL_MAX -eq "2") "conf valid key PARALLEL_MAX"
 Assert ($cfg.MODE -eq "quick") "conf valid key MODE"
 Assert ($cfg.ContainsKey('ILLEGAL LINE WITHOUT EQUALS') -eq $false) "conf illegal key skipped"
 Remove-Item -LiteralPath $tmpConf -Force
+# --- 新增：Get-PythonExe / Read-BmcPass / Invoke-IpmiProbe ---
+$py = Get-PythonExe
+Assert (($null -eq $py) -or ($py -is [string])) "Get-PythonExe returns path or null"
+$r1 = "testpass" | Read-BmcPass -Pass "" -Prompt "BMC 密码"
+Assert ($r1 -eq "testpass") "Read-BmcPass reads piped input"
+$r2 = Read-BmcPass -Pass "given" -Prompt "x"
+Assert ($r2 -eq "given") "Read-BmcPass returns given pass without prompting"
+$fake = Join-Path $env:TEMP ("fake-ipmitool-" + [guid]::NewGuid().ToString("N") + ".cmd")
+@("echo probe-out", "exit /b 0") | Set-Content -LiteralPath $fake -Encoding ASCII
+$p = Invoke-IpmiProbe -IpmiTool $fake -IpmiArgs @("mc", "info")
+Assert ($p.Out -contains "probe-out") "Invoke-IpmiProbe captures stdout"
+Assert ($p.Code -eq 0) "Invoke-IpmiProbe captures exit code"
+Remove-Item $fake -Force
 Write-Host "test-lib: ALL PASS"
