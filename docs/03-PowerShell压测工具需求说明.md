@@ -1,7 +1,10 @@
 # Memtest86+ 自动化编排与压测报告汇总工具（Windows PowerShell）需求说明
 
+> 状态：[当前有效]（2026-10-22）
+> 变更记录：2026-10-22 文档体系编号化（对齐 disk-tests）；工程基建优化更新
+
 > 依据：《02-批量压力测试方案.md》第 7 章「软件满足度与开源替代对照」
-> 定位：**PowerShell 作为编排器（Orchestrator）**——在 Windows PowerShell 中启动/引导 Memtest86+ 执行真正的内存测试，**捕获其输出日志**（MTLOG 机器可解析格式 / USB 报告 / 串口），**解析并汇总**到批量压测报告（与 `Identify-Memory.ps1` 的 `master_manifest.csv` 关联）。
+> 定位：**PowerShell 作为编排器（Orchestrator）**——在 Windows PowerShell 中启动/引导 Memtest86+ 执行真正的内存测试，**捕获其输出日志**（MTLOG 机器可解析格式 / USB 报告 / 串口），**解析并汇总**到批量压测报告（与 `scripts\Identify-Memory.ps1` 的 `master_manifest.csv` 关联）。
 > 运行环境：Windows Server / Windows 10+，PowerShell 5.1+（首选 `powershell.exe`，兼容 `pwsh`）。
 
 ---
@@ -60,7 +63,7 @@
 
 | 编号 | 需求 | 说明 |
 | --- | --- | --- |
-| FR-1 | 智能识别与建档 | 读取槽位、序列号、型号、容量、频率、厂商、DDR5 判定；复用/集成 `Identify-Memory.ps1`，生成批次清单 CSV |
+| FR-1 | 智能识别与建档 | 读取槽位、序列号、型号、容量、频率、厂商、DDR5 判定；复用/集成 `scripts\Identify-Memory.ps1`，生成批次清单 CSV |
 | FR-2 | Memtest86+ 引导编排 | 支持三种引导方式：**SOL 串口**（BMC/IPMI）、**USB 报告**（Memtest86+ v9 报告导出到 U 盘）、**EFI 一次性引导**（bcdedit 创建 UEFI 启动项）；引导参数含 `console=ttyS0,115200`、`log=ttyS0,115200`、`maxpasses=n`、`testlist=x,y,z` |
 | FR-3 | 输出日志捕获 | 抓取 Memtest86+ 串口/SOL 会话输出到文件；或读取 U 盘上的报告文件；或串口直连捕获 |
 | FR-4 | MTLOG 解析 | 解析机器可解析日志 `MTLOG ts=<秒> ev=<事件> key=value`：start banner、system info、pass/test 生命周期、timed progress、**错误事件（错误地址/测试号/位模式）**、`ev=done` |
