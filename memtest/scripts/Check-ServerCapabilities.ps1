@@ -26,7 +26,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# 共享库（Read-BmcPass 等公共逻辑；本脚本自带的 Invoke-IpmiProbe 定义在后，会遮蔽 lib 版本）
+# 共享库（Read-BmcPass / Invoke-IpmiProbe 等公共逻辑）
 . $PSScriptRoot\lib_common.ps1
 
 # 管道密码优先：脚本顶层 $input 可读外部管道（Read-BmcPass 的函数作用域内读不到，故在此先消费，
@@ -92,31 +92,23 @@ $oob = [ordered]@{
     HasTempSensors = $false
     Error = ""
 }
-# 统一执行 ipmitool：分离 stdout（字符串）/stderr（错误文本），供诊断与 -C 3 兜底复用
-function Invoke-IpmiProbe([string[]]$IpmiArgs) {
-    $raw = & $IpmiTool @IpmiArgs 2>&1
-    return [pscustomobject]@{
-        Out  = @($raw | Where-Object { $_ -is [string] })
-        Err  = @($raw | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { $_.ToString() })
-        Code = $LASTEXITCODE
-    }
-}
+# 统一执行 ipmitool 见共享库 Invoke-IpmiProbe（stdout/stderr 分离 + 退出码，供诊断与 -C 3 兜底复用）
 if ($BmcHost -ne "" -and (Test-Path -LiteralPath $IpmiTool)) {
     # 密码：带外探测需 BMC 密码而调用方未显式提供 → 管道/交互提示一次（置于 $a 拼装之前）
-    if ($BmcHost -ne "" -and -not $BmcPass) { $BmcPass = Read-BmcPass -Prompt "BMC 密码（$BmcHost）" }
+    if (-not $BmcPass) { $BmcPass = Read-BmcPass -Prompt "BMC 密码（$BmcHost）" }
     try {
         $a = @("-I", "lanplus", "-H", $BmcHost)
         if ($BmcUser) { $a += @("-U", $BmcUser) }
         if ($BmcPass) { $a += @("-P", $BmcPass) }
 
         # mc info：先默认加密套件；失败自动回退 -C 3（部分 BMC 默认套件不匹配，最常见原因）
-        $r = Invoke-IpmiProbe @($a + @("mc", "info"))
+        $r = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs @($a + @("mc", "info"))
         if ($r.Code -eq 0 -and $r.Out.Count -gt 0) {
             $oob.BmcPresent = $true
             $oob.BmcVendor = (($r.Out | Where-Object { $_ -match 'Manufacturer\s*:\s*(.+)' }) | Select-Object -First 1) -replace '.*:\s*', ''
         } else {
             $errDefault = ($r.Err -join ' | ')
-            $r = Invoke-IpmiProbe @($a + @("-C", "3", "mc", "info"))
+            $r = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs @($a + @("-C", "3", "mc", "info"))
             if ($r.Code -eq 0 -and $r.Out.Count -gt 0) {
                 $oob.BmcPresent = $true
                 $oob.BmcVendor = (($r.Out | Where-Object { $_ -match 'Manufacturer\s*:\s*(.+)' }) | Select-Object -First 1) -replace '.*:\s*', ''
@@ -129,7 +121,7 @@ if ($BmcHost -ne "" -and (Test-Path -LiteralPath $IpmiTool)) {
         # 仅 BMC 已连通才继续探测单项能力（连不上时 5/10 判「需 BMC」，把真实报错亮出来）
         if ($oob.BmcPresent) {
             # 断电循环能力：chassis status 能返回即具备 chassis 控制
-            $r = Invoke-IpmiProbe @($a + @("chassis", "status"))
+            $r = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs @($a + @("chassis", "status"))
             if ($r.Code -eq 0 -and $r.Out.Count -gt 0) {
                 $oob.PowerCycleCapable = $true
             } else {
@@ -137,7 +129,7 @@ if ($BmcHost -ne "" -and (Test-Path -LiteralPath $IpmiTool)) {
             }
 
             # 温度传感器：sdr elist 能列出即具备（含 DIMM 温度则更好）
-            $r = Invoke-IpmiProbe @($a + @("sdr", "elist"))
+            $r = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs @($a + @("sdr", "elist"))
             if ($r.Code -eq 0 -and $r.Out.Count -gt 0) {
                 $oob.HasTempSensors = ($r.Out | Where-Object { $_ -match 'degrees C' }).Count -gt 0
             } else {

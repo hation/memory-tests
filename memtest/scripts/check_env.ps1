@@ -75,7 +75,7 @@ $dbPy = Join-Path (Split-Path -Parent $PSScriptRoot) 'db\db_common.py'
 if (Test-Path $dbPy) {
     $py = Get-PythonExe
     if ($py) {
-        $ver = & $py --version 2>&1 | Select-Object -First 1
+        $ver = (& $py --version 2>&1 | Select-Object -First 1) -replace '^Python\s*', ''
         $src = if ($py -like "*tools\python*") { "内置 tools\python" } else { "系统 PATH" }
         Write-Host "[6] SQLite 历史库（可选）: db 存在，Python $ver（$src）"
     } else {
