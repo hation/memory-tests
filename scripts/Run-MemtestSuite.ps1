@@ -377,7 +377,9 @@ function Export-TestReport {
     $all = @()
     if (Test-Path $master) { $all += Import-Csv -Path $master }
     $all += $reportRows
-    $all | Export-Csv -Path $master -NoTypeInformation -Encoding UTF8
+    # 固定列投影：PS5.1 的 Export-Csv 列头由首对象属性决定，遗留旧行（无 ToolVersion 列）在前时会整体丢列，故统一重建列集合与顺序
+    $all | Select-Object Batch, ToolVersion, Slot, SerialNumber, PartNumber, CapacityGB, SpeedMTs, MemType, MatchState, TestDate, Passes, Errors, EccErrors, Result |
+        Export-Csv -Path $master -NoTypeInformation -Encoding UTF8
     Write-Host "累计总表已更新: $master（共 $($all.Count) 条）"
 }
 
