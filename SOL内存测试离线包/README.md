@@ -49,7 +49,7 @@ SOL内存测试离线包/
 
 ### 第 0 步：一次性准备
 
-1. **开启 BMC SOL + BIOS 串口重定向（115200）** —— 详见 `docs\Memtest86+ SOL方式使用指南.md` 第 3 节
+1. **开启 BMC SOL + BIOS 串口重定向（115200）** —— 详见 `docs\09-SOL使用指南.md` 第 3 节
 2. **获取 ipmitool.exe**（一次）：
    ```powershell
    .\tools\Setup-Tools.ps1
@@ -132,8 +132,14 @@ cd scripts
 
 ## 文档索引
 
-- `docs\Memtest86+ SOL方式使用指南.md` —— SOL 原理/配置/流程/排查（首选）
-- `docs\Memtest86+ Serial物理串口线方式使用指南.md` —— 离线物理串口方案
-- `docs\DDR5内存条17项验收测试方案.md` —— 17 项验收总纲
-- `docs\DDR5内存条PowerShell压测工具需求说明.md` —— 工具需求与 FR
-- `docs\DDR5内存条验收压测方案.md` —— 单机验收与批量全检流程
+- `docs\09-SOL使用指南.md` —— SOL 原理/配置/流程/排查（首选）
+- `docs\10-Serial物理串口线使用指南.md` —— 离线物理串口方案
+- `docs\02-批量压力测试方案.md` —— 17 项验收总纲 + 1000 根全检
+- `docs\03-PowerShell压测工具需求说明.md` —— 工具需求与 FR
+- `docs\01-验收测试方案.md` —— 单机验收与批量全检流程
+- `docs\05-使用手册.md` —— 三个脚本全参数手册
+- `docs\06-实践操作教程.md` —— 分步上手演练
+- `docs\07-离线部署检查清单.md` —— 部署前勾选检查表
+- `docs\04-运行环境与依赖安装说明.md` —— 环境与依赖安装
+- `docs\08-报表结构说明.md` —— 输出字段说明
+- `docs\11-引导方式对比评估.md` —— USB/SOL/Serial/EFI 选型

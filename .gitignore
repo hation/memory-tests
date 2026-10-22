@@ -2,6 +2,9 @@
 memory_results/
 output/
 
+# 另一个独立项目（disk-tests），不纳入本仓库
+disk-tests/
+
 # Windows 临时文件
 Thumbs.db
 Desktop.ini

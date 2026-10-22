@@ -1,6 +1,6 @@
 # Memtest86+ 自动化编排与压测报告汇总工具（Windows PowerShell）需求说明
 
-> 依据：《DDR5内存条17项验收测试方案.md》第 7 章「软件满足度与开源替代对照」
+> 依据：《02-批量压力测试方案.md》第 7 章「软件满足度与开源替代对照」
 > 定位：**PowerShell 作为编排器（Orchestrator）**——在 Windows PowerShell 中启动/引导 Memtest86+ 执行真正的内存测试，**捕获其输出日志**（MTLOG 机器可解析格式 / USB 报告 / 串口），**解析并汇总**到批量压测报告（与 `Identify-Memory.ps1` 的 `master_manifest.csv` 关联）。
 > 运行环境：Windows Server / Windows 10+，PowerShell 5.1+（首选 `powershell.exe`，兼容 `pwsh`）。
 
