@@ -65,7 +65,7 @@ cd C:\memtest\scripts
 .\Run-MemtestSuite.ps1 -Help
 ```
 
-> **版本核对**：`check_env.ps1` 首行 `工具版本: vN` 与交付 zip 的版本（如 `memtest-v5.zip`）**不一致 = 没拷到最新**，按 1.6 更新。
+> **版本核对**：交付 zip 固定名 `memtest.zip`，版本看**包内**：解压后 `VERSION` 文件或 `README.md` 首行 `> 工具版本: vN`；与 `check_env.ps1` 首行 `工具版本: vN` **不一致 = 没拷到最新**，按 1.6 更新。
 
 ### 1.4 服务器一次性配置（详见 [09-SOL使用指南.md](09-SOL使用指南.md) 第 3 节）
 

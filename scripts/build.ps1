@@ -210,11 +210,14 @@ $lines = @($lines | Sort-Object)   # 固定行序，保证幂等
 
 Write-Host "==> Done. CHECKSUM.txt written ($($lines.Count) files)."
 
-# -Zip：构建后压缩成交付包 <离线包名>-<版本>.zip（放在离线包同级的仓库根目录）
+# -Zip：构建后压缩成交付包 <离线包名>.zip（固定命名，如 memtest.zip；放在离线包同级的仓库根目录）
 # 参考 disk-tests scripts/make_deploy_zip.ps1：打包前完整性校验 + .NET ZipArchive 保留空目录
+# 覆盖可靠性：先写 .tmp → 原子替换正式名；失败回滚保留旧包，绝不残留半截包或静默留旧版
 if ($Zip) {
     $kitName = Split-Path -Leaf $KitDir
-    $zipPath = Join-Path $Repo "$kitName-$ver.zip"
+    $zipPath = Join-Path $Repo "$kitName.zip"   # 固定命名（版本号写在包内 VERSION / README 首行）
+    $zipTmp  = "$zipPath.tmp"
+    $zipBak  = "$zipPath.bak"
     if (-not (Test-Path -LiteralPath $checksumPath)) {
         Write-Error "CHECKSUM.txt 缺失，打包被拒绝（先构建生成 CHECKSUM 再打包）"
         exit 1
@@ -223,7 +226,14 @@ if ($Zip) {
     $resDir = Join-Path $KitDir 'results'
     if (-not (Test-Path -LiteralPath $resDir)) { New-Item -ItemType Directory -Path $resDir | Out-Null }
 
-    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+    # 清除只读属性（防覆盖失败）并清理上一次残留的 .tmp
+    foreach ($f in @($zipPath, $zipTmp)) {
+        if (Test-Path -LiteralPath $f) {
+            Set-ItemProperty -LiteralPath $f -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+        }
+    }
+    Remove-Item -LiteralPath $zipTmp -Force -ErrorAction SilentlyContinue
+
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $script:zipCount = 0
@@ -244,9 +254,25 @@ if ($Zip) {
             }
         }
     }
-    $fs = [System.IO.Compression.ZipFile]::Open($zipPath, 'Create')
+    # 写入临时文件（期间不影响现有正式包；写坏/中断也不会损坏 memtest.zip）
+    $fs = [System.IO.Compression.ZipFile]::Open($zipTmp, 'Create')
     Add-ZipDir $KitDir '' $fs
     $fs.Dispose()
+
+    # 原子替换：旧包 → .bak，新包(.tmp) → 正式名；任一步失败回滚并保留旧包
+    try {
+        Remove-Item -LiteralPath $zipBak -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $zipPath) { Move-Item -LiteralPath $zipPath -Destination $zipBak -Force }
+        Move-Item -LiteralPath $zipTmp -Destination $zipPath -Force
+        Remove-Item -LiteralPath $zipBak -Force -ErrorAction SilentlyContinue
+    } catch {
+        if (-not (Test-Path -LiteralPath $zipPath) -and (Test-Path -LiteralPath $zipBak)) {
+            Move-Item -LiteralPath $zipBak -Destination $zipPath -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $zipTmp -Force -ErrorAction SilentlyContinue
+        Write-Error ("交付包替换失败（{0} 可能被占用）：{1}。旧包已保留。" -f $zipPath, $_.Exception.Message)
+        exit 1
+    }
     $info = Get-Item $zipPath
-    Write-Host ("==> 交付包已生成: {0} ({1} MB, {2} 文件)" -f $zipPath, [math]::Round($info.Length/1MB,1), $script:zipCount)
+    Write-Host ("==> 交付包已生成: {0} ({1} MB, {2} 文件) 版本 {3}（解压后核对 VERSION 或 README 首行）" -f $zipPath, [math]::Round($info.Length/1MB,1), $script:zipCount, $ver)
 }

@@ -12,6 +12,8 @@ Desktop.ini
 
 # 交付 zip（构建产物，不入库）
 *.zip
+*.zip.tmp
+*.zip.bak
 
 # Python 字节码缓存（db/ 运行产物，不入库）
 __pycache__/
