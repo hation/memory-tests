@@ -109,7 +109,7 @@ foreach ($it in $items) {
 # ---- 汇总统计 ----
 $can   = ($assess | Where-Object { $_.Status -like "可测*" }).Count
 $cond  = ($assess | Where-Object { $_.Status -like "条件*" }).Count
-$need  = ($assess | Where-Object { $_.Status -match "需" }).Count
+$need  = ($assess | Where-Object { $_.Status -like "需*" }).Count
 $out   = ($assess | Where-Object { $_.Status -like "外包*" }).Count
 
 Write-Host ""
