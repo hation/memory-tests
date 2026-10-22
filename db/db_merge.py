@@ -53,6 +53,13 @@ def _copy_into(src, dst):
     return nb, ne, nr
 
 
+def _open_ro(path):
+    """只读打开源库（uri mode=ro）：不写 WAL、不产生 journal，避免对源库造成副作用。"""
+    import sqlite3
+    uri = 'file:%s?mode=ro' % path.replace('\\', '/')
+    return db_common._AutoCloseConn(sqlite3.connect(uri, uri=True, isolation_level=None))
+
+
 def main():
     ap = argparse.ArgumentParser(description='把 db2 数据幂等合并进 db1 副本，写入 out（按唯一键去重）')
     ap.add_argument('--db1', required=True, help='主库路径')
@@ -60,9 +67,9 @@ def main():
     ap.add_argument('--out', required=True, help='合并结果库路径')
     args = ap.parse_args()
 
-    c1 = db_common.init_db(args.db1)
-    c2 = db_common.init_db(args.db2)
-    co = db_common.init_db(args.out)
+    c1 = _open_ro(args.db1)          # 源库只读打开，无写入副作用
+    c2 = _open_ro(args.db2)
+    co = db_common.init_db(args.out)  # 目标库正常读写建表
     n1 = _copy_into(c1, co)
     n2 = _copy_into(c2, co)
     print('合并完成: db1(%d批次/%d实体/%d记录) + db2(%d批次/%d实体/%d记录) -> %s'
