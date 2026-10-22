@@ -84,39 +84,68 @@ $oob = [ordered]@{
     HasTempSensors = $false
     Error = ""
 }
+# 统一执行 ipmitool：分离 stdout（字符串）/stderr（错误文本），供诊断与 -C 3 兜底复用
+function Invoke-IpmiProbe([string[]]$IpmiArgs) {
+    $raw = & $IpmiTool @IpmiArgs 2>&1
+    return [pscustomobject]@{
+        Out  = @($raw | Where-Object { $_ -is [string] })
+        Err  = @($raw | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { $_.ToString() })
+        Code = $LASTEXITCODE
+    }
+}
 if ($BmcHost -ne "" -and (Test-Path -LiteralPath $IpmiTool)) {
     try {
         $a = @("-I", "lanplus", "-H", $BmcHost)
         if ($BmcUser) { $a += @("-U", $BmcUser) }
         if ($BmcPass) { $a += @("-P", $BmcPass) }
 
-        $mc = & $IpmiTool @($a + @("mc", "info")) 2>$null
-        if ($LASTEXITCODE -eq 0 -and $mc) {
+        # mc info：先默认加密套件；失败自动回退 -C 3（部分 BMC 默认套件不匹配，最常见原因）
+        $r = Invoke-IpmiProbe @($a + @("mc", "info"))
+        if ($r.Code -eq 0 -and $r.Out.Count -gt 0) {
             $oob.BmcPresent = $true
-            $oob.BmcVendor = (($mc | Where-Object { $_ -match 'Manufacturer\s*:\s*(.+)' }) | Select-Object -First 1) -replace '.*:\s*', ''
+            $oob.BmcVendor = (($r.Out | Where-Object { $_ -match 'Manufacturer\s*:\s*(.+)' }) | Select-Object -First 1) -replace '.*:\s*', ''
+        } else {
+            $errDefault = ($r.Err -join ' | ')
+            $r = Invoke-IpmiProbe @($a + @("-C", "3", "mc", "info"))
+            if ($r.Code -eq 0 -and $r.Out.Count -gt 0) {
+                $oob.BmcPresent = $true
+                $oob.BmcVendor = (($r.Out | Where-Object { $_ -match 'Manufacturer\s*:\s*(.+)' }) | Select-Object -First 1) -replace '.*:\s*', ''
+                $a += @("-C", "3")   # -C 3 有效，后续 chassis/sdr/sol 复用
+            } else {
+                $oob.Error = "BMC 连接失败(mc info)：默认套件[$errDefault]；-C 3 套件[$($r.Err -join ' | ')]"
+            }
         }
 
-        # 断电循环能力：chassis status 能返回即具备 chassis 控制
-        $cs = & $IpmiTool @($a + @("chassis", "status")) 2>$null
-        if ($LASTEXITCODE -eq 0 -and $cs) { $oob.PowerCycleCapable = $true }
+        # 仅 BMC 已连通才继续探测单项能力（连不上时 5/10 判「需 BMC」，把真实报错亮出来）
+        if ($oob.BmcPresent) {
+            # 断电循环能力：chassis status 能返回即具备 chassis 控制
+            $r = Invoke-IpmiProbe @($a + @("chassis", "status"))
+            if ($r.Code -eq 0 -and $r.Out.Count -gt 0) {
+                $oob.PowerCycleCapable = $true
+            } else {
+                $oob.Error = [string]::Join(' | ', (@($oob.Error, "chassis status 失败[$($r.Err -join ' | ')]") | Where-Object { $_ }))
+            }
 
-        # 温度传感器：sdr elist 能列出即具备（含 DIMM 温度则更好）
-        $sdr = & $IpmiTool @($a + @("sdr", "elist")) 2>$null
-        if ($LASTEXITCODE -eq 0 -and $sdr) {
-            $oob.HasTempSensors = ($sdr | Where-Object { $_ -match 'degrees C' }).Count -gt 0
+            # 温度传感器：sdr elist 能列出即具备（含 DIMM 温度则更好）
+            $r = Invoke-IpmiProbe @($a + @("sdr", "elist"))
+            if ($r.Code -eq 0 -and $r.Out.Count -gt 0) {
+                $oob.HasTempSensors = ($r.Out | Where-Object { $_ -match 'degrees C' }).Count -gt 0
+            } else {
+                $oob.Error = [string]::Join(' | ', (@($oob.Error, "sdr elist 失败[$($r.Err -join ' | ')]") | Where-Object { $_ }))
+            }
+
+            # SOL 可用性：短探测（启动会话 ~6 秒，有输出即可用；无输出/立刻失败=未启用）
+            $solOut = Join-Path $env:TEMP ("sol_probe_" + [guid]::NewGuid().ToString("N") + ".txt")
+            $p = Start-Process -FilePath $IpmiTool -ArgumentList ($a + @("sol", "activate")) `
+                    -RedirectStandardOutput $solOut -RedirectStandardError "$solOut.err" -PassThru -WindowStyle Hidden
+            Start-Sleep -Seconds 6
+            $hasOut = (Test-Path $solOut) -and ((Get-Item $solOut).Length -gt 0)
+            try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
+            Start-Sleep -Milliseconds 500
+            if ($hasOut) { $oob.SolAvailable = $true }
+            Remove-Item $solOut, "$solOut.err" -Force -ErrorAction SilentlyContinue
         }
-
-        # SOL 可用性：短探测（启动会话 ~6 秒，有输出即可用；无输出/立刻失败=未启用）
-        $solOut = Join-Path $env:TEMP ("sol_probe_" + [guid]::NewGuid().ToString("N") + ".txt")
-        $p = Start-Process -FilePath $IpmiTool -ArgumentList ($a + @("sol", "activate")) `
-                -RedirectStandardOutput $solOut -RedirectStandardError "$solOut.err" -PassThru -WindowStyle Hidden
-        Start-Sleep -Seconds 6
-        $hasOut = (Test-Path $solOut) -and ((Get-Item $solOut).Length -gt 0)
-        try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
-        Start-Sleep -Milliseconds 500
-        if ($hasOut) { $oob.SolAvailable = $true }
-        Remove-Item $solOut, "$solOut.err" -Force -ErrorAction SilentlyContinue
-    } catch { $oob.Error = $_.Exception.Message }
+    } catch { $oob.Error = [string]::Join(' | ', (@($oob.Error, $_.Exception.Message) | Where-Object { $_ })) }
 }
 
 # ---------------------------------------------------------------------------
