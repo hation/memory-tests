@@ -16,9 +16,9 @@ SOL内存测试离线包/
 │   ├── Run-MemtestSuite.ps1   ← 单批编排（SOL/Serial/USB/EFI 引导 + 抓日志 + 解析 + 汇总）
 │   ├── Run-BatchScheduler.ps1 ← 批量调度（读批次清单 CSV 逐批跑 + 全量汇总）
 │   └── Identify-Memory.ps1    ← 智能识别建档（序列号/容量/频率/DDR5 判定）
-├── tools/                     ← 外部工具
-│   ├── Setup-Tools.ps1        ← 首次联网自取 ipmitool.exe（约 1 分钟，之后全离线）
-│   └── README-tools.md        ← ipmitool 获取方式说明
+├── tools/                     ← 外部工具（已内置，免联网）
+│   ├── ipmitool/              ← Windows 版 ipmitool 1.8.18（exe + 依赖 DLL）
+│   └── README-tools.md        ← ipmitool 说明（来源/SHA256/用法）
 ├── boot/                      ← Memtest86+ v9.00（已离线打包）
 │   ├── memtest.iso            ← 可引导 ISO（BMC 虚拟介质/USB 引导用）
 │   ├── mt86plus_9.00_x86_64.iso.zip
@@ -39,10 +39,10 @@ SOL内存测试离线包/
 | 编排脚本 ×3 | ✅ 已含 | PowerShell 5.1 原生可跑 |
 | Memtest86+ v9.00 ISO | ✅ 已含 | 6.2MB，官方 memtest.org 下载 |
 | Memtest86+ binaries | ✅ 已含 | x86_64 等架构 EFI 负载 |
+| **ipmitool.exe** | ✅ **已内置** | Windows 版 1.8.18（含依赖 DLL），`tools\ipmitool\`，免联网免配置 |
 | 文档 ×5 | ✅ 已含 | 含 SOL/Serial 使用指南 |
-| **ipmitool.exe** | ⚠️ 需首次联网自取 | 官方不发布 Windows 版；用 `tools\Setup-Tools.ps1` 一次获取（或手动放入 `tools\`） |
 
-> 除 ipmitool 外全部离线可用。ipmitool 获取后，本包即可完全离线运行。
+> **完全离线可用**：本包含运行所需全部组件（Memtest86+ 引导镜像 + ipmitool），无需任何联网下载。
 
 ---
 
@@ -51,18 +51,15 @@ SOL内存测试离线包/
 ### 第 0 步：一次性准备
 
 1. **开启 BMC SOL + BIOS 串口重定向（115200）** —— 详见 `docs\09-SOL使用指南.md` 第 3 节
-2. **获取 ipmitool.exe**（一次）：
-   ```powershell
-   .\tools\Setup-Tools.ps1
-   ```
+2. **（无需任何下载）** 内置 ipmitool 位于 `tools\ipmitool\`，脚本自动发现，开箱即用
 3. **准备 Memtest86+ 引导介质**：BMC 虚拟介质挂载 `boot\memtest.iso`，或写 U 盘（Rufus）
 
 ### 第 1 步：确认链路通（可选）
 
 ```powershell
 .\scripts\Run-MemtestSuite.ps1 -Help
-# 手动 SOL 验证
-.\tools\ipmitool.exe -I lanplus -H <BMC_IP> -U <user> -P <pass> sol activate
+# 手动 SOL 验证（内置 ipmitool）
+.\tools\ipmitool\ipmitool.exe -I lanplus -H <BMC_IP> -U <user> -P <pass> sol activate
 ```
 
 ### 第 2 步：单批 SOL 全自动验收
@@ -77,7 +74,7 @@ cd scripts
 ### 第 3 步：批量 1000 根（推荐）
 
 1. 编辑 `config\batches.example.csv` → 复制为 `config\batches.csv`，每行一个批次
-2. 运行批量调度（先把 ipmitool 路径加到 PATH，或用 -IpmiTool）：
+2. 运行批量调度（ipmitool 已内置、脚本自动发现，无需配置）：
    ```powershell
    .\scripts\Run-BatchScheduler.ps1 -ManifestCsv .\config\batches.csv -DryRun   # 先预览
    .\scripts\Run-BatchScheduler.ps1 -ManifestCsv .\config\batches.csv -ContinueOnError
@@ -128,7 +125,7 @@ cd scripts
 ## 安全与来源
 
 - Memtest86+ v9.00：官方 https://memtest.org/download/v9.00/ （GPLv2）
-- ipmitool：BSD 许可，官方不发布 Windows 二进制；Setup-Tools.ps1 仅从文档化来源下载并校验 PE 头，建议核对来源校验和
+- ipmitool 1.8.18：BSD 许可，内置 Windows 构建（含 Cygwin 运行时 DLL）；exe SHA256 = `2EF7D24E2E5CFD674AD1FCC694DEA6ED79A026C9F17D584DAA745A106F11EEC3`
 - 脚本仅做用户态操作与远程管理控制，不修改系统引导配置（EFI 使用一次性启动项）
 
 ## 文档索引
