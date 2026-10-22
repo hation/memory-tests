@@ -348,6 +348,13 @@ function Export-TestReport {
         [string]$LogPath
     )
 
+    # 报表列清单（单一来源：行对象字面量顺序须与此一致；master 合并投影复用此数组）
+    $reportColumns = @(
+        'Batch', 'ToolVersion', 'Slot', 'SerialNumber', 'PartNumber', 'CapacityGB',
+        'SpeedMTs', 'MemType', 'MatchState', 'TestDate', 'Passes', 'Errors',
+        'EccErrors', 'Result'
+    )
+
     $reportRows = @()
     foreach ($inv in $Inventory) {
         $reportRows += [PSCustomObject]@{
@@ -372,14 +379,13 @@ function Export-TestReport {
     $reportRows | Export-Csv -Path $file -NoTypeInformation -Encoding UTF8
     Write-Host "批次报告已生成: $file"
 
-    # 合并到 master_manifest.csv
+    # 合并到 master_manifest.csv（用 List 避免 $all += 的 O(n²) 拷贝）
     $master = Join-Path $LogPath "master_manifest.csv"
-    $all = @()
-    if (Test-Path $master) { $all += Import-Csv -Path $master }
-    $all += $reportRows
+    $all = New-Object System.Collections.Generic.List[object]
+    if (Test-Path $master) { $all.AddRange([object[]](Import-Csv -Path $master)) }
+    $all.AddRange([object[]]$reportRows)
     # 固定列投影：PS5.1 的 Export-Csv 列头由首对象属性决定，遗留旧行（无 ToolVersion 列）在前时会整体丢列，故统一重建列集合与顺序
-    $all | Select-Object Batch, ToolVersion, Slot, SerialNumber, PartNumber, CapacityGB, SpeedMTs, MemType, MatchState, TestDate, Passes, Errors, EccErrors, Result |
-        Export-Csv -Path $master -NoTypeInformation -Encoding UTF8
+    $all | Select-Object $reportColumns | Export-Csv -Path $master -NoTypeInformation -Encoding UTF8
     Write-Host "累计总表已更新: $master（共 $($all.Count) 条）"
 }
 
@@ -439,7 +445,9 @@ switch ($BootMethod) {
     "EFI" {
         Invoke-EfiBoot -EfiImage $EfiImage -EfiBootId $EfiBootId -SerialParam $SerialParam `
             -MaxPasses $MaxPasses -TestList $TestList
-        # EFI 引导后机器重启，本进程结束；重启后的续测/采集由配套计划任务执行
+        # EFI 引导后机器重启，本进程结束；重启后的续测/采集由配套计划任务执行。
+        # 本机将重启，capture/parse/done 事件不可达，故此处补一条引导事件供日志追踪。
+        Write-Event -Type stage -Data @{stage='efi'; status='boot'; batch=$BatchName}
         exit 0
     }
 }
