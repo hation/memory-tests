@@ -16,4 +16,11 @@ Assert ($u.PassesCompleted -eq 4) "usb passes"
 Assert ($u.PerTest.Count -eq 2) "usb pertest"
 $t = Invoke-TextReportParser -ReportFile "$PSScriptRoot\fixtures\sample-truncated.usb.txt"
 Assert ($t.FinalStatus -eq "INCOMPLETE") "truncated not misjudged"
+$tmpConf = Join-Path $env:TEMP "mt-test-app.conf"
+@("# 业务占位", "PARALLEL_MAX=2", "MODE=quick", "ILLEGAL LINE WITHOUT EQUALS", "") | Set-Content -LiteralPath $tmpConf -Encoding UTF8
+$cfg = Get-Config -Path $tmpConf
+Assert ($cfg.PARALLEL_MAX -eq "2") "conf valid key PARALLEL_MAX"
+Assert ($cfg.MODE -eq "quick") "conf valid key MODE"
+Assert ($cfg.ContainsKey('ILLEGAL LINE WITHOUT EQUALS') -eq $false) "conf illegal key skipped"
+Remove-Item -LiteralPath $tmpConf -Force
 Write-Host "test-lib: ALL PASS"

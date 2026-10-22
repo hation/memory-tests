@@ -12,6 +12,7 @@
 #   Read-CsvManifest         健壮 CSV 读取（.NET TextFieldParser，保留行尾空字段）
 #   Write-Event              向 stdout 输出一行 JSON 事件
 #   Get-AppVersion           读取 VERSION（缺失回退 v0-dev）
+#   Get-Config                读取 conf/app.conf 键值配置（非法键跳过）
 #   Write-Log                时间戳日志输出 [HH:mm:ss] LEVEL msg
 #   ConvertTo-CsvField       CSV 字段转义（含逗号/引号/换行加引号）
 #   Confirm-Targets          打印目标清单并要求 y 确认（业务占位骨架）
@@ -310,6 +311,31 @@ function Get-AppVersion {
         if ($v -ne "") { return $v }
     }
     return "v0-dev"
+}
+
+# 读取键值/注释格式配置文件，返回 hashtable（修改 conf 即生效）。
+# 行为：跳过空行与 # 注释行；非法键（不含 = 的行）跳过不报错；
+#       Path 缺省时读 $PSScriptRoot\..\conf\app.conf；文件不存在返回空 hashtable。
+function Get-Config {
+    param([string]$Path = '')
+
+    $cfg = @{}
+    if ($Path -eq '') {
+        $Path = Join-Path $PSScriptRoot '..\conf\app.conf'
+    }
+    if (-not (Test-Path -LiteralPath $Path)) { return $cfg }
+
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        $t = $line.Trim()
+        if ($t -eq '' -or $t.StartsWith('#')) { continue }
+        if ($t.IndexOf('=') -lt 0) { continue }   # 非法键（无 =）跳过不报错
+        $idx = $t.IndexOf('=')
+        $key = $t.Substring(0, $idx).Trim()
+        if ($key -eq '') { continue }
+        $val = $t.Substring($idx + 1).Trim()
+        $cfg[$key] = $val
+    }
+    return $cfg
 }
 
 # 时间戳日志输出：[HH:mm:ss] LEVEL msg
