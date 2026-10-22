@@ -1,4 +1,4 @@
-﻿> 工具版本：v3
+﻿> 工具版本：v4
 # SOL 内存测试离线包（Memtest86+ 全自动验收）
 
 基于 Windows PowerShell 的 **DDR5 内存条 SOL 全自动验收工具包**。编排器远程引导 Memtest86+、抓取 MTLOG 日志、解析并汇总成逐根可追溯的压测报告。
@@ -15,7 +15,11 @@ SOL内存测试离线包/
 ├── scripts/                   ← 编排脚本（离线可用）
 │   ├── Run-MemtestSuite.ps1   ← 单批编排（SOL/Serial/USB/EFI 引导 + 抓日志 + 解析 + 汇总）
 │   ├── Run-BatchScheduler.ps1 ← 批量调度（读批次清单 CSV 逐批跑 + 全量汇总）
-│   └── Identify-Memory.ps1    ← 智能识别建档（序列号/容量/频率/DDR5 判定）
+│   ├── Identify-Memory.ps1    ← 智能识别建档（序列号/容量/频率/DDR5 判定）
+│   ├── Run-ServerAssessment.ps1 ← 服务器能力一键评估（17 项可行性 + 建议动作）
+│   ├── Check-ServerCapabilities.ps1 ← 能力探测（带内 CIM + 带外 BMC/IPMI）
+│   ├── check_env.ps1          ← 环境自检（首行打印工具版本，核对是否最新版）
+│   └── lib_common.ps1         ← 公共函数库（脚本共用）
 ├── tools/                     ← 外部工具（已内置，免联网）
 │   ├── ipmitool/              ← Windows 版 ipmitool 1.8.18（exe + 依赖 DLL）
 │   └── README-tools.md        ← ipmitool 说明（来源/SHA256/用法）
@@ -36,7 +40,7 @@ SOL内存测试离线包/
 
 | 组件 | 离线状态 | 说明 |
 | --- | --- | --- |
-| 编排脚本 ×3 | ✅ 已含 | PowerShell 5.1 原生可跑 |
+| 编排脚本 ×7 | ✅ 已含 | 含 check_env 环境自检、能力评估；PowerShell 5.1 原生可跑 |
 | Memtest86+ v9.00 ISO | ✅ 已内置 | `boot\memtest.iso`（6.2MB，无需下载） |
 | Memtest86+ binaries | ✅ 已含 | x86_64 等架构 EFI 负载 |
 | **ipmitool.exe** | ✅ **已内置** | Windows 版 1.8.18（含依赖 DLL），`tools\ipmitool\`，免联网免配置 |
@@ -50,13 +54,16 @@ SOL内存测试离线包/
 
 ### 第 0 步：一次性准备
 
-1. **开启 BMC SOL + BIOS 串口重定向（115200）** —— 详见 `docs\09-SOL使用指南.md` 第 3 节
-2. **（无需任何下载）** 内置 ipmitool 位于 `tools\ipmitool\`，脚本自动发现，开箱即用
-3. **准备 Memtest86+ 引导介质**：BMC 虚拟介质挂载 `boot\memtest.iso`，或写 U 盘（Rufus）
+1. **固定部署目录**：将本包拷贝到固定位置（推荐 `C:\memtest\`），拷贝即用、免安装、免联网（脚本用相对路径定位，目录拷到哪都能跑）
+2. **开启 BMC SOL + BIOS 串口重定向（115200）** —— 详见 `docs\09-SOL使用指南.md` 第 3 节
+3. **（无需任何下载）** 内置 ipmitool 位于 `tools\ipmitool\`，脚本自动发现，开箱即用
+4. **准备 Memtest86+ 引导介质**：BMC 虚拟介质挂载 `boot\memtest.iso`，或写 U 盘（Rufus）
 
 ### 第 1 步：确认链路通（可选）
 
 ```powershell
+# 环境自检：首行"工具版本: vN"应与交付包版本一致
+.\scripts\check_env.ps1
 .\scripts\Run-MemtestSuite.ps1 -Help
 # 手动 SOL 验证（内置 ipmitool）
 .\tools\ipmitool\ipmitool.exe -I lanplus -H <BMC_IP> -U <user> -P <pass> sol activate
@@ -142,3 +149,14 @@ cd scripts
 - `docs\08-报表结构说明.md` —— 输出字段说明
 - `docs\11-引导方式对比评估.md` —— USB/SOL/Serial/EFI 选型
 - `docs\12-离线部署与SOL测试手册.md` —— 机房落地三步走（部署→能力验证→SOL 开测）
+
+---
+
+## 版本信息
+
+> 核对：`check_env.ps1` 首行"工具版本: vN"应与交付包版本一致；不一致 = 没拷到最新，更新流程见 `docs\12` 手册 1.6。
+
+- **v4**：打包与部署对齐 disk-tests —— `build.ps1 -Zip` 改为 .NET ZipArchive（保留空目录）+ 打包前完整性校验
+- **v3**：新增 `check_env.ps1` 环境自检（首行显示版本）；固定部署目录 `C:\memtest\`；版本行幂等注入
+- **v2**：内置 ipmitool 1.8.18（免联网）；文档统一为"应用内使用"
+- **v1**：初始发布（SOL 全自动验收工具包）

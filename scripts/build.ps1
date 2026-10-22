@@ -149,7 +149,8 @@ $docsList = @(
     '09-SOL使用指南.md',
     '10-Serial物理串口线使用指南.md',
     '11-引导方式对比评估.md',
-    '12-离线部署与SOL测试手册.md'
+    '12-离线部署与SOL测试手册.md',
+    '13-服务器信息识别指南.md'
 )
 $keyFiles = @(
     (Join-Path $KitDir 'scripts\lib_common.ps1'),
@@ -184,10 +185,42 @@ $lines = @($lines | Sort-Object)   # 固定行序，保证幂等
 Write-Host "==> Done. CHECKSUM.txt written ($($lines.Count) files)."
 
 # -Zip：构建后压缩成交付包 <离线包名>-<版本>.zip（放在离线包同级的仓库根目录）
+# 参考 disk-tests scripts/make_deploy_zip.ps1：打包前完整性校验 + .NET ZipArchive 保留空目录
 if ($Zip) {
     $kitName = Split-Path -Leaf $KitDir
     $zipPath = Join-Path $Repo "$kitName-$ver.zip"
+    if (-not (Test-Path -LiteralPath $checksumPath)) {
+        Write-Error "CHECKSUM.txt 缺失，打包被拒绝（先构建生成 CHECKSUM 再打包）"
+        exit 1
+    }
+    # 结果目录保留在包内（空目录也留条目，对齐 disk-tests 保留 logs/results）
+    $resDir = Join-Path $KitDir 'memory_results'
+    if (-not (Test-Path -LiteralPath $resDir)) { New-Item -ItemType Directory -Path $resDir | Out-Null }
+
     if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
-    Compress-Archive -Path (Join-Path $KitDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
-    Write-Host "==> 交付包已生成: $zipPath"
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $script:zipCount = 0
+    function Add-ZipDir([string]$base, [string]$rel, $archive) {
+        $full = if ($rel) { Join-Path $base $rel } else { $base }
+        foreach ($item in Get-ChildItem -LiteralPath $full -Force) {
+            $childRel = if ($rel) { "$rel/$($item.Name)" } else { $item.Name }
+            if ($item.PSIsContainer) {
+                [void]$archive.CreateEntry("$childRel/")
+                Add-ZipDir $base $childRel $archive
+            } else {
+                $entry = $archive.CreateEntry($childRel)
+                $s = $entry.Open()
+                $in = [System.IO.File]::OpenRead($item.FullName)
+                $in.CopyTo($s)
+                $in.Dispose(); $s.Dispose()
+                $script:zipCount++
+            }
+        }
+    }
+    $fs = [System.IO.Compression.ZipFile]::Open($zipPath, 'Create')
+    Add-ZipDir $KitDir '' $fs
+    $fs.Dispose()
+    $info = Get-Item $zipPath
+    Write-Host ("==> 交付包已生成: {0} ({1} MB, {2} 文件)" -f $zipPath, [math]::Round($info.Length/1MB,1), $script:zipCount)
 }

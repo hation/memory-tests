@@ -22,7 +22,7 @@
    ├── tools\ipmitool\  Windows 版 ipmitool 1.8.18（含依赖 DLL，已内置）
    ├── db\              SQLite 历史库（可选，需 Python 3）
    ├── conf\ / config\  配置文件与批次/预期清单模板
-   ├── docs\            文档（01-12）
+   ├── docs\            文档（01-13）
    ├── memory_results\  结果目录（首次运行自动创建）
    └── VERSION / CHECKSUM.txt / README.md
    ```
