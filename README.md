@@ -21,7 +21,7 @@
 ## 环境要求
 
 - Windows 10 / Server 2016+，PowerShell 5.1+（系统自带）
-- SOL 方式需 ipmitool.exe（官方不发布 Windows 版，见 `tools/Setup-Tools.ps1` 或 [04-运行环境与依赖安装说明.md](docs/04-运行环境与依赖安装说明.md)）
+- SOL 方式需 ipmitool（**已内置**在离线包 `SOL内存测试离线包\tools\ipmitool\`，免联网免配置；见 [04-运行环境与依赖安装说明.md](docs/04-运行环境与依赖安装说明.md)）
 - 被测服务器需开启 BMC SOL + BIOS 串口重定向（115200）
 - 历史库可选功能需 Python 3（`db/` 工具，见 [05-使用手册.md](docs/05-使用手册.md) 第 10 节）
 

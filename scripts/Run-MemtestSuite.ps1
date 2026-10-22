@@ -128,6 +128,12 @@ foreach ($d in @($LogPath, $rawDir, $reportDir)) {
 
 if ($BatchName -eq "") { $BatchName = "batch_" + (Get-Date -Format "yyyyMMdd_HHmmss") }
 
+# 自动发现内置 ipmitool：若离线包/项目内存在 tools\ipmitool\ipmitool.exe，则优先使用（免联网、免配置）
+if ($IpmiTool -eq "ipmitool") {
+    $bundled = Join-Path (Split-Path -Parent $PSScriptRoot) "tools\ipmitool\ipmitool.exe"
+    if (Test-Path -LiteralPath $bundled) { $IpmiTool = $bundled }
+}
+
 # ----------------------------------------------------------------------------
 # FR-3/FR-4 日志捕获与解析（解析器见共享库 lib_common.ps1）
 # ----------------------------------------------------------------------------

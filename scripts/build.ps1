@@ -146,6 +146,7 @@ foreach ($doc in $docsList) {
 }
 $keyFiles += (Join-Path $KitDir 'boot\memtest.iso')
 $keyFiles += (Join-Path $KitDir 'tools\README-tools.md')
+$keyFiles += (Join-Path $KitDir 'tools\ipmitool\ipmitool.exe')
 $keyFiles += (Join-Path $KitDir 'README.md')
 $keyFiles += (Join-Path $KitDir 'VERSION')
 # db 脚本（可选功能，同步进包则一并纳入校验清单；不存在则跳过，保持向后兼容）
