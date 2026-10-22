@@ -19,6 +19,9 @@
 #   Get-StageDone / Set-StageDone  .done 阶段标记读写
 #   Wait-Slot                并发槽位信号量（骨架）
 #   Get-SystemEvents         WHEA 内存相关系统事件（近 HoursBack 小时）
+#   Get-PythonExe           定位内置 Python 解释器（tools\python 优先，其次 PATH）
+#   Read-BmcPass            BMC 密码读取（已给直接用；空则管道/交互输入）
+#   Invoke-IpmiProbe        调用 ipmitool 探针（stdout/stderr 分离 + 退出码）
 # ============================================================================
 
 # ----------------------------------------------------------------------------
