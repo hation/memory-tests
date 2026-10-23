@@ -22,8 +22,9 @@ param(
     [int]$DefaultIndex = -1,         # grub.cfg 默认菜单索引（覆盖预设）
     [string]$Python = '',            # Python 解释器路径（缺省自动探测）
     [switch]$SkipBuild,              # 跳过 ISO 组装与挂载自检（仅 layout + grub-mkimage）
-    [switch]$Smoke,                  # 预留：调用 scripts\Smoke-MemtestIso.ps1（Task 4 接线）
-    [switch]$DownloadQemu,           # 预留：下载 QEMU（Task 4 接线）
+    [switch]$Smoke,                  # 先用快速预设构建临时 ISO 跑 QEMU 冒烟，通过后再构建正式 ISO
+    [switch]$DownloadQemu,           # -Smoke 时联网下载 QEMU + OVMF 到 -QemuDir
+    [string]$QemuDir = '',           # QEMU/OVMF 目录（默认 tools\qemu；-Smoke 时传给冒烟脚本）
     [switch]$Help                    # 打印帮助并退出 0
 )
 
@@ -38,7 +39,7 @@ New-MemtestSolIso.ps1 - 生成 Memtest86+ SOL 引导 ISO（memtest-sol.iso）
   New-MemtestSolIso.ps1 [-Kernel <path>] [-PresetsConf <path>] [-OutIso <path>]
                         [-GrubDir <path>] [-DownloadGrub] [-TimeoutSeconds <int>]
                         [-DefaultIndex <int>] [-Python <path>] [-SkipBuild]
-                        [-Smoke] [-DownloadQemu] [-Help]
+                        [-Smoke] [-DownloadQemu] [-QemuDir <path>] [-Help]
 
 参数:
   -Kernel          内核文件（默认 memtest\boot\binaries\mt86p_900_x86_64）
@@ -50,8 +51,10 @@ New-MemtestSolIso.ps1 - 生成 Memtest86+ SOL 引导 ISO（memtest-sol.iso）
   -DefaultIndex    grub.cfg 默认菜单索引（覆盖预设）
   -Python          Python 解释器路径（缺省自动探测）
   -SkipBuild       跳过 ISO 组装与挂载自检（仅 layout + grub-mkimage）
-  -Smoke           预留：调用 scripts\Smoke-MemtestIso.ps1（Task 4 接线）
-  -DownloadQemu    预留：下载 QEMU（Task 4 接线）
+  -Smoke           先用 -DefaultIndex 2 -TimeoutSeconds 3 构建临时 ISO 跑 QEMU 冒烟，
+                   通过后再构建正式 -OutIso；冒烟失败仍产出但置"未验证"并退出 1
+  -DownloadQemu    -Smoke 时联网下载 QEMU + OVMF 到 -QemuDir
+  -QemuDir         QEMU/OVMF 目录（默认 tools\qemu；-Smoke 时传给 Smoke-MemtestIso.ps1）
   -Help            显示本帮助并退出
 '@
 }
@@ -77,8 +80,9 @@ if ($Help) { Print-Help; exit 0 }
 $Repo = Split-Path -Parent $PSScriptRoot
 if ($Kernel -eq '')      { $Kernel = Join-Path $Repo 'memtest\boot\binaries\mt86p_900_x86_64' }
 if ($PresetsConf -eq '') { $PresetsConf = Join-Path $Repo 'config\memtest-presets.conf' }
-if ($OutIso -eq '')      { $OutIso = Join-Path $Repo 'memtest\boot\memtest-sol.iso' }
-if ($GrubDir -eq '')     { $GrubDir = Join-Path $Repo 'tools\grub' }
+if ($OutIso -eq '')     { $OutIso = Join-Path $Repo 'memtest\boot\memtest-sol.iso' }
+if ($GrubDir -eq '')    { $GrubDir = Join-Path $Repo 'tools\grub' }
+if ($QemuDir -eq '')    { $QemuDir = Join-Path $Repo 'tools\qemu' }
 
 # ---------- 1. 检查 GRUB / Python / conf / 内核 ----------
 $modSrc = Join-Path $GrubDir 'lib\grub\x86_64-efi'
@@ -153,6 +157,61 @@ if (-not $Python -or -not (Test-Path -LiteralPath $Python)) {
 if (-not (Test-Path -LiteralPath $PresetsConf)) { Fail "预设配置文件不存在: $PresetsConf" }
 if (-not (Test-Path -LiteralPath $Kernel))       { Fail "内核文件不存在: $Kernel" }
 
+# ---------- 2.0 -Smoke：先用快速预设构建临时 ISO 跑 QEMU 冒烟，通过后再构建正式 ISO ----------
+$smokePassed = $false
+$smokeReason = ''
+if ($Smoke) {
+    # A1 前置校验：确认 -DefaultIndex 2（1轮快速筛选 预设）存在，缺失则提示改索引
+    try {
+        $smokePresets = Get-MemtestPresets -Path $PresetsConf
+        if ($smokePresets.Presets.Count -lt 3) {
+            Fail "冒烟预设索引 2 不存在：当前 conf 仅 $($smokePresets.Presets.Count) 个预设（1轮快速筛选 应位于索引 2）。请调整 config\memtest-presets.conf 或改 -Smoke 的预设索引。"
+        }
+    } catch {
+        Fail "读取预设配置失败（-Smoke 前置校验）: $($_.Exception.Message)"
+    }
+
+    $smokeIso = Join-Path $env:TEMP ("memtest-sol-smoke-" + [guid]::NewGuid().ToString("N") + ".iso")
+    try {
+        # A1：用 -DefaultIndex 2 -TimeoutSeconds 3（对应 1轮快速筛选 预设）构建临时 ISO（不写正式 OutIso）
+        Write-Host "==> -Smoke：构建临时冒烟 ISO（预设索引 2，超时 3s）：$smokeIso"
+        $subPs = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $subArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $MyInvocation.MyCommand.Definition,
+                     '-GrubDir', $GrubDir, '-Kernel', $Kernel, '-PresetsConf', $PresetsConf,
+                     '-OutIso', $smokeIso, '-Python', $Python, '-DefaultIndex', '2', '-TimeoutSeconds', '3')
+        & $subPs @subArgs | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            Fail "冒烟临时 ISO 构建失败（退出码 $LASTEXITCODE）。提示：-Smoke 用 -DefaultIndex 2 指向 1轮快速筛选 预设，若该预设缺失请调整 config\memtest-presets.conf 或改索引。"
+        }
+
+        # A2：调 Smoke-MemtestIso.ps1（环境变量 MT_SMOKE_SCRIPT 可覆盖脚本路径，供测试注入 fake）
+        $smokeScript = if ($env:MT_SMOKE_SCRIPT) { $env:MT_SMOKE_SCRIPT } else { Join-Path $PSScriptRoot 'Smoke-MemtestIso.ps1' }
+        if (-not (Test-Path -LiteralPath $smokeScript)) {
+            Fail "Smoke 脚本不存在: $smokeScript（需要 scripts\Smoke-MemtestIso.ps1）"
+        }
+        # 用 hashtable splat（命名绑定可靠；数组 splat 在 PS5.1 不保证按名解析）
+        $smokeParams = @{ Iso = $smokeIso; QemuDir = $QemuDir }
+        if ($DownloadQemu) { $smokeParams['DownloadQemu'] = $true }
+        Write-Host "==> -Smoke：调用 $smokeScript"
+        $smokeResult = & $smokeScript @smokeParams
+        $smokeExit = $LASTEXITCODE
+        if ($null -ne $smokeResult -and $null -ne $smokeResult.Pass) {
+            $smokePassed = [bool]$smokeResult.Pass
+            $smokeReason = [string]$smokeResult.Reason
+        } else {
+            $smokePassed = ($smokeExit -eq 0)
+            if (-not $smokePassed) { $smokeReason = "Smoke 脚本退出码非 0（$smokeExit）" }
+        }
+        if ($smokePassed) {
+            Write-Host "==> 冒烟通过，继续构建正式 ISO"
+        } else {
+            Write-Host "==> 警告：冒烟未通过（$smokeReason），正式 ISO 仍将构建但标记为未验证"
+        }
+    } finally {
+        Remove-Item -LiteralPath $smokeIso -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ---------- 2-3. 解析预设并生成 grub.cfg ----------
 try {
     $presets = Get-MemtestPresets -Path $PresetsConf
@@ -214,6 +273,8 @@ try {
                  'search', 'all_video', 'video', 'gfxterm', 'font', 'reboot', 'halt', 'test', 'boot')
     $mkOk = $false
     $errText = ''
+    # 引导必需模块（缺则无法引导，禁止移除）：normal / iso9660 / linux
+    $bootCriticalMods = @('normal', 'iso9660', 'linux')
     # 阶段 A：按简报命令（不带 -d）
     $out = Invoke-NativeCmd { & $mkimage -O x86_64-efi -o $efiOut -p /GRUB @($efiMods) 2>&1 }
     $errText = $out | Out-String
@@ -222,9 +283,13 @@ try {
     while (-not $mkOk -and $removedAny) {
         $removedAny = $false
         if ($errText -match "cannot find module ['`"]([^'`"]+)['`"]" -and $efiMods -contains $matches[1]) {
-            $efiMods = @($efiMods | Where-Object { $_ -ne $matches[1] })
+            $bad = $matches[1]
+            if ($bad -in $bootCriticalMods) {
+                Fail "grub-mkimage 找不到引导必需模块 '$bad'（normal/iso9660/linux 禁止移除，无法引导）: $errText"
+            }
+            $efiMods = @($efiMods | Where-Object { $_ -ne $bad })
             $removedAny = $true
-            Write-Host "==> 警告：grub-mkimage 找不到模块 $($matches[1])，已从参数列表移除后重试"
+            Write-Host "==> 警告：grub-mkimage 找不到模块 $bad，已从参数列表移除后重试"
             $out = Invoke-NativeCmd { & $mkimage -O x86_64-efi -o $efiOut -p /GRUB @($efiMods) 2>&1 }
             $errText = $out | Out-String
             $mkOk = ($LASTEXITCODE -eq 0)
@@ -239,9 +304,13 @@ try {
         while (-not $mkOk -and $removedAny) {
             $removedAny = $false
             if ($errText -match "cannot find module ['`"]([^'`"]+)['`"]" -and $efiMods -contains $matches[1]) {
-                $efiMods = @($efiMods | Where-Object { $_ -ne $matches[1] })
+                $bad = $matches[1]
+                if ($bad -in $bootCriticalMods) {
+                    Fail "grub-mkimage(-d) 找不到引导必需模块 '$bad'（normal/iso9660/linux 禁止移除，无法引导）: $errText"
+                }
+                $efiMods = @($efiMods | Where-Object { $_ -ne $bad })
                 $removedAny = $true
-                Write-Host "==> 警告：grub-mkimage(-d) 找不到模块 $($matches[1])，已从参数列表移除后重试"
+                Write-Host "==> 警告：grub-mkimage(-d) 找不到模块 $bad，已从参数列表移除后重试"
                 $out = Invoke-NativeCmd { & $mkimage -d $modSrc -O x86_64-efi -o $efiOut -p /GRUB @($efiMods) 2>&1 }
                 $errText = $out | Out-String
                 $mkOk = ($LASTEXITCODE -eq 0)
@@ -249,6 +318,23 @@ try {
         }
     }
     if (-not $mkOk) { Fail "grub-mkimage 失败（退出码 $LASTEXITCODE）: $errText" }
+    # 最终校验：内嵌模块集覆盖 grub.cfg 用到的命令（set/menuentry 为 core 内建，无需模块）
+    $cfgCmdMods = @{ 'search' = 'search'; 'linux' = 'linux'; 'boot' = 'boot' }
+    $missingCfgMods = @()
+    foreach ($ln in ($grubCfg -split "`r?`n")) {
+        $t = $ln.Trim()
+        if ($t -eq '') { continue }
+        $cmd = ($t -split '\s+')[0]
+        if ($cfgCmdMods.ContainsKey($cmd)) {
+            $m = $cfgCmdMods[$cmd]
+            if ($efiMods -notcontains $m -and $missingCfgMods -notcontains "$cmd($m)") {
+                $missingCfgMods += "$cmd($m)"
+            }
+        }
+    }
+    if ($missingCfgMods.Count -gt 0) {
+        Fail "内嵌模块集未覆盖 grub.cfg 用到的命令: $($missingCfgMods -join ', ')（grub-mkimage 结果异常）"
+    }
     Write-Host "==> EFI 镜像已生成: $efiOut"
 
     # ---------- 6. 组装 ISO（先写 .tmp，成功原子替换正式名） ----------
@@ -307,18 +393,10 @@ try {
     Remove-Item -LiteralPath $layout -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# ---------- 8. -Smoke / -DownloadQemu 预留接线（Task 4） ----------
-if ($Smoke) {
-    $smokeScript = Join-Path $PSScriptRoot 'Smoke-MemtestIso.ps1'
-    if (Test-Path -LiteralPath $smokeScript) {
-        Write-Host "==> -Smoke：调用 $smokeScript"
-        & $smokeScript -Iso $OutIso
-    } else {
-        Write-Host "==> -Smoke 预留接线：scripts\Smoke-MemtestIso.ps1 尚不存在（Task 4 实现），跳过。"
-    }
-}
-if ($DownloadQemu) {
-    Write-Host "==> -DownloadQemu 预留参数：Task 4 接线 QEMU 下载，当前跳过。"
+# ---------- 8. -Smoke 结果收尾：失败置"未验证"并退出 1（正式 ISO 已产出） ----------
+if ($Smoke -and -not $smokePassed) {
+    Write-Host "==> 警告：产物未验证（冒烟失败: $smokeReason）: $OutIso"
+    exit 1
 }
 
 Write-Host "==> 完成: $OutIso"
