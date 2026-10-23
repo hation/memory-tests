@@ -46,7 +46,8 @@ New-MemtestSolIso.ps1 - 生成 Memtest86+ SOL 引导 ISO（memtest-sol.iso）
   -PresetsConf     预设配置文件（默认 config\memtest-presets.conf）
   -OutIso          输出 ISO 路径（默认 memtest\boot\memtest-sol.iso）
   -GrubDir         GRUB 工具目录（默认 tools\grub；需含 bin\grub-mkimage[.exe|.cmd] 与 lib\grub\x86_64-efi\*.mod）
-  -DownloadGrub    联网下载 GRUB Windows 构建包并解压到 -GrubDir
+  -DownloadGrub    联网下载 GRUB 2.06 Windows 构建包（2.12 的 x86_64-efi 产物有
+                   _stack_chk_guard 缺陷不可引导）并解压到 -GrubDir
   -TimeoutSeconds  grub.cfg 超时秒数（覆盖预设）
   -DefaultIndex    grub.cfg 默认菜单索引（覆盖预设）
   -Python          Python 解释器路径（缺省自动探测）
@@ -98,7 +99,7 @@ if (-not $mkimage -or -not $modsPresent) {
         Fail "GRUB 工具未就位：需要 $GrubDir\bin\grub-mkimage.exe 与 $GrubDir\lib\grub\x86_64-efi\*.mod（可用 -DownloadGrub 自动下载）"
     }
     Write-Host "==> -DownloadGrub：联网下载 GRUB Windows 构建包到 $GrubDir"
-    $grubUrl = 'https://ftp.gnu.org/gnu/grub/grub-2.12-for-windows.zip'
+    $grubUrl = 'https://ftp.gnu.org/gnu/grub/grub-2.06-for-windows.zip'
     try {
         Invoke-WebRequest -Uri $grubUrl -Method Head -UseBasicParsing -ErrorAction Stop | Out-Null
     } catch {
@@ -122,11 +123,13 @@ if (-not $mkimage -or -not $modsPresent) {
         # 定位 grub-mkimage.exe 与 x86_64-efi 模块目录
         $mkExe = Get-ChildItem -LiteralPath $extract -Recurse -Filter 'grub-mkimage.exe' -File | Select-Object -First 1
         if (-not $mkExe) { Fail "下载包中未找到 grub-mkimage.exe（$grubUrl）" }
-        # 官方 grub-2.12-for-windows.zip 把 exe 与 x86_64-efi 模块目录放在包根；
+        # 官方 grub-2.06-for-windows.zip 解压后为 grub-2.06-for-windows\ 顶层目录：
+        # exe 位于 bin\，模块目录 lib\grub\x86_64-efi\（2.12 把 exe 与 x86_64-efi 放在包根，
+        # 但其 x86_64-efi 产物有 _stack_chk_guard 缺陷不可引导，故用 2.06）；
         # 重组为 <GrubDir>\bin\grub-mkimage.exe + <GrubDir>\lib\grub\x86_64-efi\*.mod 以满足就位判定
         New-Item -ItemType Directory -Path (Join-Path $GrubDir 'bin') -Force | Out-Null
         Copy-Item -LiteralPath $mkExe.FullName -Destination (Join-Path $GrubDir 'bin') -Force
-        $x64ModDir = Get-ChildItem -LiteralPath $mkExe.Directory.FullName -Directory -ErrorAction SilentlyContinue |
+        $x64ModDir = Get-ChildItem -LiteralPath $extract -Recurse -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -eq 'x86_64-efi' } | Select-Object -First 1
         if ($x64ModDir) {
             $modDst = Join-Path $GrubDir 'lib\grub\x86_64-efi'
