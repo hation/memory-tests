@@ -159,6 +159,38 @@ try {
     Assert ($code -eq 0) "用例5 覆盖构建退出码 0（实际 $code）"
     Assert ((Get-Item -LiteralPath $outIso5).Length -ne $oldLen) "用例5 OutIso 已被新 ISO 覆盖（长度变化）"
     Assert (-not (Test-Path -LiteralPath "$outIso5.tmp")) "用例5 无 .tmp 残留"
+
+    # ---- 用例 6：默认路径布局探测 — kit 平铺布局（boot\config\tools 平铺在脚本父目录下） ----
+    # 模拟离线包：把编排器连同 lib_common/iso9660_build 复制到 <dir>\scripts，脚本默认值应自动探测
+    # 到 <dir>\boot\binaries\mt86p_900_x86_64（内核）与 <dir>\boot\memtest-sol.iso（ISO），无需显式传参。
+    $kit = Join-Path $work "kit-layout"
+    New-Item -ItemType Directory -Path (Join-Path $kit "scripts"), (Join-Path $kit "boot\binaries"), (Join-Path $kit "config") -Force | Out-Null
+    foreach ($f in @('New-MemtestSolIso.ps1', 'lib_common.ps1', 'iso9660_build.py')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "..\scripts\$f") -Destination (Join-Path $kit "scripts\$f") -Force
+    }
+    Set-Content -LiteralPath (Join-Path $kit "boot\binaries\mt86p_900_x86_64") -Value ("FAKE KERNEL BYTES " * 200) -Encoding ASCII
+    [System.IO.File]::WriteAllText((Join-Path $kit "config\memtest-presets.conf"), $defaultConf, (New-Object System.Text.UTF8Encoding($false)))
+    New-FakeGrubDir (Join-Path $kit "tools\grub")
+    $kitScript = Join-Path $kit "scripts\New-MemtestSolIso.ps1"
+    & $ps -NoProfile -ExecutionPolicy Bypass -File $kitScript -Python $py 2>&1 | Out-Null
+    Assert ($LASTEXITCODE -eq 0) "用例6 kit 平铺布局默认路径构建退出码 0（实际 $LASTEXITCODE）"
+    Assert (Test-Path -LiteralPath (Join-Path $kit "boot\memtest-sol.iso")) "用例6 kit 布局默认 OutIso 落盘 boot\memtest-sol.iso"
+    Assert (-not (Test-Path -LiteralPath (Join-Path $kit "memtest"))) "用例6 假目录无 memtest\ 仓库子目录（确保走 kit 布局分支）"
+
+    # ---- 用例 7：默认路径布局探测 — 仓库布局（memtest\boot\binaries\...） ----
+    $repo2 = Join-Path $work "repo-layout"
+    New-Item -ItemType Directory -Path (Join-Path $repo2 "scripts"), (Join-Path $repo2 "memtest\boot\binaries"), (Join-Path $repo2 "config") -Force | Out-Null
+    foreach ($f in @('New-MemtestSolIso.ps1', 'lib_common.ps1', 'iso9660_build.py')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "..\scripts\$f") -Destination (Join-Path $repo2 "scripts\$f") -Force
+    }
+    Set-Content -LiteralPath (Join-Path $repo2 "memtest\boot\binaries\mt86p_900_x86_64") -Value ("FAKE KERNEL BYTES " * 200) -Encoding ASCII
+    [System.IO.File]::WriteAllText((Join-Path $repo2 "config\memtest-presets.conf"), $defaultConf, (New-Object System.Text.UTF8Encoding($false)))
+    New-FakeGrubDir (Join-Path $repo2 "tools\grub")
+    $repo2Script = Join-Path $repo2 "scripts\New-MemtestSolIso.ps1"
+    & $ps -NoProfile -ExecutionPolicy Bypass -File $repo2Script -Python $py 2>&1 | Out-Null
+    Assert ($LASTEXITCODE -eq 0) "用例7 仓库布局默认路径构建退出码 0（实际 $LASTEXITCODE）"
+    Assert (Test-Path -LiteralPath (Join-Path $repo2 "memtest\boot\memtest-sol.iso")) "用例7 仓库布局默认 OutIso 落盘 memtest\boot\memtest-sol.iso"
+    Assert (-not (Test-Path -LiteralPath (Join-Path $repo2 "boot"))) "用例7 假目录无 kit 平铺 boot\ 子目录（确保走仓库布局分支）"
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
