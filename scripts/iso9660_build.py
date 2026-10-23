@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Minimal ISO9660 Level-1 assembler (pure stdlib, zero dependencies).
+"""Minimal ISO9660 assembler (pure stdlib, zero dependencies).
 
 CLI:
     python scripts/iso9660_build.py <layout_dir> <out.iso>
 
-Writes a mountable, UEFI-scanable ISO9660 Level-1 image:
+File names are strict Level-1 8.3; directory identifiers are Level-2
+(1-31 chars). This split is deliberate: the GRUB module dir X86_64-EFI
+exceeds the Level-1 8-char cap (see _validate_name).
+
+Writes a mountable, UEFI-scanable ISO9660 image:
 - Logical sector 2048 bytes; PVD (type 1, magic "CD001") at LBA 16.
 - Volume descriptor sequence = PVD + terminator only: NO Joliet SVD,
   NO Rock Ridge (no SP/ER system-use fields), NO El Torito boot record.
@@ -33,9 +37,13 @@ PVD_LBA = 16
 TERM_LBA = 17
 L_PATH_LBA = 18
 
-# ISO9660 d-characters and a-characters (ECMA-119 7.4.1)
+# ISO9660 d-characters (ECMA-119 7.4.1) plus a conservative set of DOS 8.3-safe
+# specials. Separators that would corrupt the 8.3 form or clash with the ';1'
+# version suffix (space, ';', ':', '/', '\\', '*', '?') are deliberately
+# excluded so a non-conforming name always fails validation (review F3).
 D_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
-A_CHARS = D_CHARS | set("!\"%&'()*+,-./:;<=>?_ ")
+SAFE_SPECIAL = set("-^~!#%&@{}()'")
+NAME_CHARS = D_CHARS | SAFE_SPECIAL
 
 
 class _File:
@@ -72,7 +80,13 @@ class _Dir:
 def _validate_name(name, is_dir):
     """Validate and upper-case an 8.3 file name or a directory name.
 
-    Raises ValueError for names that cannot be represented in ISO9660 Level 1.
+    Allowed characters are ISO9660 d-characters plus a conservative set of
+    DOS 8.3-safe specials (NAME_CHARS); spaces and ';' (the ISO version
+    separator) are rejected so every accepted file maps 1:1 to an 8.3 name
+    without an accidental second ';1'. File names are strict Level-1 8.3;
+    directory identifiers may be up to 31 chars (Level-2 limit, needed for
+    the GRUB module dir X86_64-EFI). Raises ValueError for names that
+    cannot be represented.
     """
     up = name.upper()
     if is_dir:
@@ -82,7 +96,7 @@ def _validate_name(name, is_dir):
         # up to the Level 2 limit (31). File names stay strict 8.3.
         if not (1 <= len(up) <= 31):
             raise ValueError("directory name must be 1-31 chars: %r" % name)
-        if any(c not in A_CHARS for c in up) or '.' in up:
+        if any(c not in NAME_CHARS for c in up) or '.' in up:
             raise ValueError("invalid directory name (ISO9660): %r" % name)
         return up
     base, dot, ext = up.partition('.')
@@ -92,7 +106,7 @@ def _validate_name(name, is_dir):
         raise ValueError("file base name must be 1-8 chars: %r" % name)
     if dot and not (1 <= len(ext) <= 3):
         raise ValueError("file extension must be 1-3 chars: %r" % name)
-    if any(c not in A_CHARS for c in base + ext):
+    if any(c not in NAME_CHARS for c in base + ext):
         raise ValueError("invalid character in file name (ISO9660 Level 1): %r" % name)
     return base + ('.' + ext if dot else '')
 
