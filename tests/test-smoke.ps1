@@ -1,7 +1,7 @@
 ﻿# ============================================================================
 # test-smoke.ps1 — Smoke-MemtestIso.ps1（QEMU 冒烟）回归测试
 # 用 fake qemu stub（.cmd，解析参数里 -serial file:<path> 写假 MTLOG）隔离真实 QEMU。
-# 覆盖简报 5 个用例 + New-MemtestSolIso -Smoke 接线 2 个用例（fake Smoke stub 经
+# 覆盖简报 5 个用例 + 评审 I1 竞态回归 3 个用例 + New-MemtestSolIso -Smoke 接线 2 个用例（fake Smoke stub 经
 # 环境变量 MT_SMOKE_SCRIPT 注入，避免依赖真实 QEMU/OVMF）。
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File tests\test-smoke.ps1
 # ============================================================================
@@ -22,11 +22,15 @@ New-Item -ItemType Directory -Path $work | Out-Null
 
 # fake qemu stub：解析 %* 里的 -serial file:<path>，向该路径写入假 MTLOG 行，然后 exit /b <code>
 # 注意 .cmd 变量展开陷阱：只用 %* 与 !var!（EnableDelayedExpansion），不引用 %~f0 之类路径自展开。
-function New-FakeQemu([string]$QemuDir, [string[]]$MtlogLines, [int]$ExitCode) {
+# -DelaySeconds >0 时写 MTLOG 后 sleep（ping -n N ≈ N-1s）再退出，模拟 memtest 写完 ev=done 到
+# QEMU(-no-reboot) 自然退出之间的延迟窗口 / 长时间不退出（供超时/超限强杀用例）。
+function New-FakeQemu([string]$QemuDir, [string[]]$MtlogLines, [int]$ExitCode, [int]$DelaySeconds = 0) {
     New-Item -ItemType Directory -Path $QemuDir -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $QemuDir "OVMF_CODE.fd") -Value "fake-CODE" -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $QemuDir "OVMF_VARS.fd") -Value "fake-VARS" -Encoding ASCII
     $echoLines = $MtlogLines | ForEach-Object { '>> "!MTLOG:~5!" echo ' + $_ }
+    $delayLine = ''
+    if ($DelaySeconds -gt 0) { $delayLine = "`n    ping 127.0.0.1 -n $($DelaySeconds + 1) > nul" }
     $body = @'
 @echo off
 setlocal EnableDelayedExpansion
@@ -41,7 +45,7 @@ for %%a in (%*) do (
 )
 if defined MTLOG (
     if "!MTLOG:~0,5!"=="file:" (
-'@ + "`n" + ($echoLines -join "`n") + "`n" + "    )`n)`n" + "exit /b $ExitCode"
+'@ + "`n" + ($echoLines -join "`n") + $delayLine + "`n" + "    )`n)`n" + "exit /b $ExitCode"
     $stub = Join-Path $QemuDir "qemu-system-x86_64.cmd"
     Set-Content -LiteralPath $stub -Value $body -Encoding ASCII
     return $stub
@@ -110,8 +114,30 @@ try {
     Assert ($r5.Pass -eq $false) "用例5 Pass=$false（实际 $($r5.Pass)）"
     Assert ($r5.Reason -match '退出码') "用例5 Reason 提及退出码（$($r5.Reason)）"
 
-    # ---- 用例 6/7：New-MemtestSolIso -Smoke 接线 ----
-    $ErrorActionPreference = 'Continue'   # 用例5 dot-source 再次泄漏 Stop，恢复
+    # ---- 用例 6：ev=done 后 QEMU 延迟自然退出（stub 写 done 后 sleep ~8s 再退出 0）→ Pass=$true ----
+    # （回归评审 I1：旧实现检测到 done 后立即强杀 → 退出码非 0 误判；新实现等待自然退出）
+    $ErrorActionPreference = 'Continue'
+    $q6 = Join-Path $work "qemu6"
+    New-FakeQemu $q6 $fullMtlog 0 -DelaySeconds 8
+    $r6 = . $smokeScript -Iso $dummyIso -QemuDir $q6 -TimeLimitSeconds 30
+    Assert ($r6.Pass -eq $true) "用例6 done 后延迟退出 Pass=$true（实际 $($r6.Pass)，Reason=$($r6.Reason)）"
+
+    # ---- 用例 7：ev=done 后 QEMU 始终不退（-ExitWaitSeconds 3 等待超限强杀）→ 仍判 Pass ----
+    $q7 = Join-Path $work "qemu7"
+    New-FakeQemu $q7 $fullMtlog 0 -DelaySeconds 60
+    $r7 = . $smokeScript -Iso $dummyIso -QemuDir $q7 -TimeLimitSeconds 30 -ExitWaitSeconds 3
+    Assert ($r7.Pass -eq $true) "用例7 done 后等待超限强杀仍 Pass=$true（实际 $($r7.Pass)，Reason=$($r7.Reason)）"
+    Assert ($r7.Reason -match 'ev=done') "用例7 Reason 按 ev=done 判 Pass（$($r7.Reason)）"
+
+    # ---- 用例 8：超时无 ev=done（stub 只写非 done 事件且不退出，-TimeLimitSeconds 10）→ 超时强杀 → Pass=$false ----
+    $q8 = Join-Path $work "qemu8"
+    New-FakeQemu $q8 ($fullMtlog | Where-Object { $_ -notmatch 'ev=done' }) 0 -DelaySeconds 60
+    $r8 = . $smokeScript -Iso $dummyIso -QemuDir $q8 -TimeLimitSeconds 10
+    Assert ($r8.Pass -eq $false) "用例8 超时无 done Pass=$false（实际 $($r8.Pass)，Reason=$($r8.Reason)）"
+    Assert ($r8.Reason -match 'done') "用例8 Reason 提及 done（$($r8.Reason)）"
+
+    # ---- 用例 9/10：New-MemtestSolIso -Smoke 接线 ----
+    $ErrorActionPreference = 'Continue'   # 用例5/6/7/8 dot-source 再次泄漏 Stop，恢复
     # fake GRUB 目录（同 test-iso-build 做法）
     $grubDir = Join-Path $work "grub"
     New-Item -ItemType Directory -Path (Join-Path $grubDir "bin"), (Join-Path $grubDir "lib\grub\x86_64-efi") -Force | Out-Null
@@ -159,7 +185,7 @@ param([string]$Iso, [string]$QemuDir, [switch]$DownloadQemu, [int]$TimeLimitSeco
 [PSCustomObject]@{ Pass = $false; Mtlog = ''; Reason = 'fake-smoke-fail' }
 '@ | Set-Content -LiteralPath $fakeSmokeFail -Encoding UTF8
 
-    # 用例 6：-Smoke 且冒烟成功 → 退出码 0，正式 ISO 产出，输出含"冒烟通过"
+    # 用例 9：-Smoke 且冒烟成功 → 退出码 0，正式 ISO 产出，输出含"冒烟通过"
     $env:MT_SMOKE_SCRIPT = $fakeSmokePass
     $outIso6 = Join-Path $work "out6.iso"
     $argList6 = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $orchestrator,
@@ -167,11 +193,11 @@ param([string]$Iso, [string]$QemuDir, [switch]$DownloadQemu, [int]$TimeLimitSeco
         '-PresetsConf', $conf, '-Python', $py, '-Smoke')
     $out6 = & $ps @argList6 2>&1 | Out-String
     $code6 = $LASTEXITCODE
-    Assert ($code6 -eq 0) "用例6 冒烟通过退出码 0（实际 $code6）"
-    Assert (Test-Path -LiteralPath $outIso6) "用例6 正式 ISO 产出"
-    Assert ($out6 -match '冒烟通过') "用例6 输出含'冒烟通过'"
+    Assert ($code6 -eq 0) "用例9 冒烟通过退出码 0（实际 $code6）"
+    Assert (Test-Path -LiteralPath $outIso6) "用例9 正式 ISO 产出"
+    Assert ($out6 -match '冒烟通过') "用例9 输出含'冒烟通过'"
 
-    # 用例 7：-Smoke 且冒烟失败 → 退出码 1，正式 ISO 仍产出，输出含"未验证"
+    # 用例 10：-Smoke 且冒烟失败 → 退出码 1，正式 ISO 仍产出，输出含"未验证"
     $env:MT_SMOKE_SCRIPT = $fakeSmokeFail
     $outIso7 = Join-Path $work "out7.iso"
     $argList7 = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $orchestrator,
@@ -179,9 +205,9 @@ param([string]$Iso, [string]$QemuDir, [switch]$DownloadQemu, [int]$TimeLimitSeco
         '-PresetsConf', $conf, '-Python', $py, '-Smoke')
     $out7 = & $ps @argList7 2>&1 | Out-String
     $code7 = $LASTEXITCODE
-    Assert ($code7 -eq 1) "用例7 冒烟失败退出码 1（实际 $code7）"
-    Assert (Test-Path -LiteralPath $outIso7) "用例7 冒烟失败仍产出正式 ISO"
-    Assert ($out7 -match '未验证') "用例7 输出含'未验证'"
+    Assert ($code7 -eq 1) "用例10 冒烟失败退出码 1（实际 $code7）"
+    Assert (Test-Path -LiteralPath $outIso7) "用例10 冒烟失败仍产出正式 ISO"
+    Assert ($out7 -match '未验证') "用例10 输出含'未验证'"
 
     Remove-Item Env:MT_SMOKE_SCRIPT -ErrorAction SilentlyContinue
 } finally {

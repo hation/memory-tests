@@ -1,10 +1,12 @@
 ﻿# ============================================================================
 # Smoke-MemtestIso.ps1 — QEMU/OVMF 冒烟验证 Memtest SOL ISO
 # 用 QEMU(-machine q35 -accel whpx:tcg) + OVMF 引导 ISO，串口重定向到文件，
-# 断言 MTLOG 出现 ev=start/ev=spd/ev=pass_end/ev=done 且 QEMU 退出码 0 即冒烟通过。
+# 断言 MTLOG 出现 ev=start/ev=spd/ev=pass_end/ev=done；QEMU 自然退出且退出码 0 即冒烟通过；
+# 若 ev=done 已出现而 QEMU 未在 -ExitWaitSeconds 上限内自然退出被强杀，仍判 Pass
+# （done 是 memtest 完成的权威信号，避免 done 后等待退出窗口内强杀导致的退出码非 0 误判）。
 # 依赖：<QemuDir>/qemu-system-x86_64[.exe|.cmd|.bat] + OVMF CODE/VARS（-DownloadQemu 自动下载）。
 # 返回：[PSCustomObject]@{ Pass=[bool]; Mtlog=[path]; Reason=[string] }（stdout 亦打印摘要）。
-# 用法：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Smoke-MemtestIso.ps1 [-Iso <path>] [-QemuDir <path>] [-TimeLimitSeconds <int>] [-DownloadQemu] [-Help]
+# 用法：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Smoke-MemtestIso.ps1 [-Iso <path>] [-QemuDir <path>] [-TimeLimitSeconds <int>] [-ExitWaitSeconds <int>] [-DownloadQemu] [-Help]
 # ============================================================================
 
 [CmdletBinding()]
@@ -12,6 +14,7 @@ param(
     [string]$Iso = '',
     [string]$QemuDir = '',
     [int]$TimeLimitSeconds = 600,
+    [int]$ExitWaitSeconds = 30,
     [switch]$DownloadQemu,
     [switch]$Help
 )
@@ -30,12 +33,14 @@ Smoke-MemtestIso.ps1 - QEMU/OVMF 冒烟验证 Memtest SOL ISO
 
 用法:
   Smoke-MemtestIso.ps1 [-Iso <path>] [-QemuDir <path>] [-TimeLimitSeconds <int>]
-                       [-DownloadQemu] [-Help]
+                       [-ExitWaitSeconds <int>] [-DownloadQemu] [-Help]
 
 参数:
   -Iso              待验证 ISO 路径（必填）
   -QemuDir          QEMU/OVMF 目录（默认 tools\qemu；需 qemu-system-x86_64.exe 与 OVMF CODE/VARS）
   -TimeLimitSeconds 轮询 MTLOG 超时秒数（默认 600，每 5s 查一次）
+  -ExitWaitSeconds  检测到 ev=done 后等待 QEMU 自然退出的上限秒数（默认 30，每 1s 查一次；
+                    超限才强杀，且因 ev=done 已出现仍判 Pass）
   -DownloadQemu     联网下载 QEMU Windows 构建 + OVMF 到 -QemuDir
   -Help             显示本帮助并退出 0
 
@@ -223,6 +228,7 @@ try {
     # ---------- 3. 轮询 mtlog 直到 ev=done / 超时 / qemu 进程结束（每 5s） ----------
     $deadline = (Get-Date).AddSeconds($TimeLimitSeconds)
     $done = $false
+    $killed = $false
     while (-not $done -and (Get-Date) -lt $deadline -and -not $p.HasExited) {
         Start-Sleep -Seconds 5
         if (Test-Path -LiteralPath $mtlog) {
@@ -230,14 +236,25 @@ try {
             if ($t -match 'ev=done') { $done = $true }
         }
     }
+    # 检测到 ev=done 后不立即强杀：等待 QEMU 自然退出（上限 -ExitWaitSeconds，每 1s 查一次），
+    # 规避 memtest 写完 done 到 -no-reboot 退出之间延迟窗口内强杀导致的退出码非 0 误判。
+    $exitDeadline = $null
+    while ($done -and -not $p.HasExited -and ($null -eq $exitDeadline -or (Get-Date) -lt $exitDeadline)) {
+        if ($null -eq $exitDeadline) { $exitDeadline = (Get-Date).AddSeconds($ExitWaitSeconds) }
+        Start-Sleep -Seconds 1
+    }
+    # 强杀仅两种：① 超时（-TimeLimitSeconds 到仍无 ev=done）；② done 已出现但等待自然退出超上限。
     if (-not $p.HasExited) {
         if (-not $done) { Write-Host "==> 冒烟超时（$TimeLimitSeconds s），终止 QEMU 进程" }
+        else { Write-Host "==> ev=done 已出现但 QEMU 未在 $ExitWaitSeconds s 内自然退出，强制终止" }
         Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+        $killed = $true
     }
     $p.WaitForExit()
     $exitCode = $p.ExitCode
 
-    # ---------- 4. 判定：mtlog 含 start/spd/pass_end/done 且 qemu 退出码 0 → Pass ----------
+    # ---------- 4. 判定：mtlog 含 start/spd/pass_end/done 且退出码 0 → Pass；
+    #     done 已出现但等待自然退出超限被强杀（$killed）→ 仍 Pass（done 是 memtest 完成权威信号） ----------
     $logText = if (Test-Path -LiteralPath $mtlog) { Get-Content -LiteralPath $mtlog -Raw -Encoding UTF8 } else { '' }
     $missing = @()
     foreach ($ev in @('start', 'spd', 'pass_end', 'done')) {
@@ -245,12 +262,17 @@ try {
     }
     $pass = $false
     $reason = ''
-    if ($exitCode -ne 0) {
-        $reason = "QEMU 退出码非 0（$exitCode）"
-        if ($missing.Count -gt 0) { $reason += "；MTLOG 缺事件: $($missing -join ', ')" }
-    } elseif ($missing.Count -gt 0) {
+    if ($missing.Count -gt 0) {
         $reason = "MTLOG 缺少事件: $($missing -join ', ')"
         if ($missing -contains 'done') { $reason += '（可能超时或测试未完成）' }
+        if ($exitCode -ne 0) { $reason += "；QEMU 退出码非 0（$exitCode）" }
+    } elseif ($exitCode -ne 0 -and -not $killed) {
+        # 自然退出但退出码非 0 → Fail（保持既有契约：自然退出用真实退出码判定）
+        $reason = "QEMU 退出码非 0（$exitCode）"
+    } elseif ($killed) {
+        # done 已出现但等待自然退出超限被强杀 → done 是权威信号，判 Pass
+        $pass = $true
+        $reason = "MTLOG 完整（start/spd/pass_end/done）；QEMU 进程被强制终止（退出码 $exitCode），因 ev=done 已出现判 Pass"
     } else {
         $pass = $true
         $reason = 'MTLOG 完整（start/spd/pass_end/done），QEMU 退出码 0'
