@@ -1,7 +1,8 @@
 ﻿# ============================================================================
 # Smoke-MemtestIso.ps1 — QEMU/OVMF 冒烟验证 Memtest SOL ISO
 # 用 QEMU(-machine q35 -accel <首选加速器，默认 whpx>) + OVMF 引导 ISO，串口重定向到文件，
-# 断言 MTLOG 出现 ev=start/ev=spd/ev=pass_end/ev=done；QEMU 自然退出且退出码 0 即冒烟通过；
+# 断言 MTLOG 出现 ev=start/ev=pass_end/ev=done（ev=spd 可选：memtest86+ v9 在 QEMU 下无
+# SPD/SMBus 数据不输出 ev=spd，缺失不判失败）；QEMU 自然退出且退出码 0 即冒烟通过；
 # 首选加速器启动即失败（进程 20s 内退出且退出码非 0、mtlog 无任何输出）时，自动回退 -accel tcg 重试一次；
 # 若 ev=done 已出现而 QEMU 未在 -ExitWaitSeconds 上限内自然退出被强杀，仍判 Pass
 # （done 是 memtest 完成的权威信号，避免 done 后等待退出窗口内强杀导致的退出码非 0 误判）。
@@ -280,10 +281,10 @@ try {
             continue
         }
 
-        # ---------- 5. 判定：mtlog 含 start/spd/pass_end/done 且退出码 0 → Pass；
+        # ---------- 5. 判定：mtlog 含 start/pass_end/done（spd 可选）且退出码 0 → Pass；
         #     done 已出现但等待自然退出超限被强杀（$killed）→ 仍 Pass（done 是 memtest 完成权威信号） ----------
         $missing = @()
-        foreach ($ev in @('start', 'spd', 'pass_end', 'done')) {
+        foreach ($ev in @('start', 'pass_end', 'done')) {
             if ($logText -notmatch ("ev=" + $ev)) { $missing += $ev }
         }
         $pass = $false
@@ -298,16 +299,16 @@ try {
         } elseif ($killed) {
             # done 已出现但等待自然退出超限被强杀 → done 是权威信号，判 Pass
             $pass = $true
-            $reason = "MTLOG 完整（start/spd/pass_end/done）；QEMU 进程被强制终止（退出码 $exitCode），因 ev=done 已出现判 Pass"
+            $reason = "MTLOG 完整（start/pass_end/done，spd 可选）；QEMU 进程被强制终止（退出码 $exitCode），因 ev=done 已出现判 Pass"
         } else {
             $pass = $true
-            $reason = 'MTLOG 完整（start/spd/pass_end/done），QEMU 退出码 0'
+            $reason = 'MTLOG 完整（start/pass_end/done，spd 可选），QEMU 退出码 0'
         }
         if ($fallbackUsed) { $reason = '已回退 tcg；' + $reason }
 
         # ---------- 6. 打印摘要并返回对象 ----------
         if ($pass) {
-            Write-Host "==> 冒烟通过$(if ($fallbackUsed) { '（已回退 tcg）' } else { '' })：MTLOG 含 start/spd/pass_end/done（$mtlog）"
+            Write-Host "==> 冒烟通过$(if ($fallbackUsed) { '（已回退 tcg）' } else { '' })：MTLOG 含 start/pass_end/done（spd 可选）（$mtlog）"
         } else {
             Write-Host "==> 冒烟失败：$reason（MTLOG: $mtlog）"
         }

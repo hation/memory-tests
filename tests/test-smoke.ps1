@@ -131,6 +131,13 @@ try {
     Assert ($r3.Pass -eq $false) "用例3 Pass=$false（实际 $($r3.Pass)）"
     Assert ($r3.Reason -match 'start') "用例3 Reason 提及 start（$($r3.Reason)）"
 
+    # ---- 用例 3a：缺 ev=spd（其余齐全）→ Pass=$true（spd 可选：QEMU 下无 SPD 数据不输出，缺失不判失败）----
+    $q3a = Join-Path $work "qemu3a"
+    New-FakeQemu $q3a ($fullMtlog | Where-Object { $_ -notmatch 'ev=spd' }) 0
+    $r3a = . $smokeScript -Iso $dummyIso -QemuDir $q3a -TimeLimitSeconds 30
+    Assert ($r3a.Pass -eq $true) "用例3a 缺 spd Pass=$true（实际 $($r3a.Pass)，Reason=$($r3a.Reason)）"
+    Assert ($r3a.Reason -match 'start/pass_end/done') "用例3a Reason 按 start/pass_end/done 判 Pass（$($r3a.Reason)）"
+
     # ---- 用例 4：QemuDir 缺 qemu-system-x86_64.exe 且未 -DownloadQemu → 报错退出 1 ----
     # （dot-source 冒烟脚本会把 EAP 设为 Stop 泄漏到本作用域，这里恢复 Continue 使 2>&1 不抛终止错误）
     $ErrorActionPreference = 'Continue'
