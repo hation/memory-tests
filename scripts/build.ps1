@@ -70,7 +70,9 @@ $scriptFiles = @(
     'Check-ServerCapabilities.ps1',
     'Run-ServerAssessment.ps1',
     'check_env.ps1',
-    'Diag-Bmc.ps1'
+    'Diag-Bmc.ps1',
+    'New-MemtestSolIso.ps1',
+    'Smoke-MemtestIso.ps1'
 )
 Sync-Dir -Src $scriptSrc -Dst $scriptDst -Exclude @('build.ps1')
 foreach ($f in $scriptFiles) {
@@ -90,7 +92,13 @@ foreach ($d in @('boot', 'config', 'tools', 'conf')) {
     $dst = Join-Path $KitDir $d
     if (Test-Path -LiteralPath $src) {
         New-Item -ItemType Directory -Path $dst -Force | Out-Null
-        Copy-Item -Path (Join-Path $src '*') -Destination $dst -Recurse -Force
+        if ($d -eq 'tools') {
+            # QEMU 仅构建机冒烟用，不入离线包；grub 保留随包携带供离线重建
+            Get-ChildItem -LiteralPath $src -Force | Where-Object { $_.Name -ne 'qemu' } |
+                ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $dst -Recurse -Force }
+        } else {
+            Copy-Item -Path (Join-Path $src '*') -Destination $dst -Recurse -Force
+        }
     }
 }
 
@@ -147,7 +155,8 @@ $required = @(
     (Join-Path $KitDir 'scripts\Run-MemtestSuite.ps1'),
     (Join-Path $KitDir 'docs\01-验收测试方案.md'),
     (Join-Path $KitDir 'boot\memtest.iso'),
-    (Join-Path $KitDir 'tools\README-tools.md')
+    (Join-Path $KitDir 'tools\README-tools.md'),
+    (Join-Path $KitDir 'scripts\iso9660_build.py')
 )
 $missing = @($required | Where-Object { -not (Test-Path -LiteralPath $_) })
 if ($missing.Count -gt 0) {

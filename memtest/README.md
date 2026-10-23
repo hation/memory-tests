@@ -22,18 +22,24 @@ memtest/
 │   ├── Run-ServerAssessment.ps1 ← 服务器能力一键评估（17 项可行性 + 建议动作）
 │   ├── Check-ServerCapabilities.ps1 ← 能力探测（带内 CIM + 带外 BMC/IPMI）
 │   ├── check_env.ps1          ← 环境自检（首行打印工具版本，核对是否最新版）
+│   ├── New-MemtestSolIso.ps1  ← 菜单版 ISO 构建（预设 conf + 内核 + GRUB → memtest-sol.iso，构建机需 Python 3）
+│   ├── Smoke-MemtestIso.ps1   ← QEMU/OVMF 冒烟验证 ISO 可引导（构建机）
+│   ├── iso9660_build.py       ← ISO 组装脚本（构建机需 Python 3）
 │   └── lib_common.ps1         ← 公共函数库（脚本共用）
 ├── tools/                     ← 外部工具（已内置，免联网）
 │   ├── ipmitool/              ← Windows 版 ipmitool 1.8.18（exe + 依赖 DLL）
+│   ├── grub/                  ← GRUB 2.06（grub-mkimage + x86_64-efi 模块，离线重建菜单版 ISO 用）
 │   └── README-tools.md        ← ipmitool 说明（来源/SHA256/用法）
 ├── boot/                      ← Memtest86+ v9.00（已离线打包）
 │   ├── memtest.iso            ← 可引导 ISO（BMC 虚拟介质/USB 引导用）
+│   ├── memtest-sol.iso        ← 菜单版 UEFI ISO（GRUB 引导菜单，超时自动默认，无人值守用，推荐）
 │   ├── mt86plus_9.00_x86_64.iso.zip
 │   ├── binaries.zip
 │   └── binaries/              ← mt86p_900_x86_64 等（EFI/PXE 链式引导用）
 ├── config/                    ← 配置模板
 │   ├── batches.example.csv    ← 批次清单模板（批量调度用）
-│   └── expected.example.csv   ← 预期清单模板（防调包校验用）
+│   ├── expected.example.csv   ← 预期清单模板（防调包校验用）
+│   └── memtest-presets.conf   ← 菜单版 ISO 预设配置（改轮数/预设后重跑构建脚本）
 └── docs/                      ← 全部文档
 ```
 
@@ -43,10 +49,14 @@ memtest/
 
 | 组件 | 离线状态 | 说明 |
 | --- | --- | --- |
-| 编排脚本 ×7 | ✅ 已含 | 含 check_env 环境自检、能力评估；PowerShell 5.1 原生可跑 |
+| 编排脚本 ×9 | ✅ 已含 | 含 check_env 环境自检、能力评估、菜单版 ISO 构建/冒烟工具；PowerShell 5.1 原生可跑（iso9660_build.py 需 Python 3） |
 | Memtest86+ v9.00 ISO | ✅ 已内置 | `boot\memtest.iso`（6.2MB，无需下载） |
+| **memtest-sol.iso（菜单版 UEFI ISO）** | ✅ **已内置** | `boot\memtest-sol.iso`，GRUB 引导菜单（4轮验收/2轮/1轮筛选/交互），超时 10s 自动选默认，BMC 虚拟介质无人值守用 |
+| **New-MemtestSolIso.ps1 / Smoke-MemtestIso.ps1** | ✅ **已含** | `scripts\`，菜单版 ISO 构建/冒烟工具（构建机需 Python 3；产物 ISO 运行不需要 Python） |
+| **memtest-presets.conf** | ✅ **已含** | `config\memtest-presets.conf`，菜单版 ISO 预设配置（改轮数/预设后重跑构建脚本） |
 | Memtest86+ binaries | ✅ 已含 | x86_64 等架构 EFI 负载 |
 | **ipmitool.exe** | ✅ **已内置** | Windows 版 1.8.18（含依赖 DLL），`tools\ipmitool\`，免联网免配置 |
+| GRUB 2.06 构建工具 | ✅ 已含 | `tools\grub\`（grub-mkimage + x86_64-efi 模块），离线重建菜单版 ISO 用 |
 | 文档 ×5 | ✅ 已含 | 含 SOL/Serial 使用指南 |
 
 > **完全离线可用**：本包含运行所需全部组件（Memtest86+ 引导镜像 + ipmitool），无需任何联网下载。
@@ -147,7 +157,7 @@ memtest/
 
 ## 文档索引
 
-- `docs\09-SOL使用指南.md` —— SOL 原理/配置/流程/排查（首选）
+- `docs\09-SOL使用指南.md` —— SOL 原理/配置/流程/排查（首选）；菜单版 ISO 用法见 §4.1（菜单版 ISO）
 - `docs\10-Serial物理串口线使用指南.md` —— 离线物理串口方案
 - `docs\02-批量压力测试方案.md` —— 17 项验收总纲 + 1000 根全检
 - `docs\03-PowerShell压测工具需求说明.md` —— 工具需求与 FR

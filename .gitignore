@@ -30,3 +30,7 @@ tmp/
 
 # 便携 Python（内置工具，不入库）
 memtest/tools/python/
+
+# ISO 构建工具（构建机本地下载，不入库；grub/qemu 均按需 -DownloadGrub/-DownloadQemu 获取）
+tools/grub/
+tools/qemu/
