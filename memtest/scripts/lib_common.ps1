@@ -480,3 +480,106 @@ function Invoke-IpmiProbe {
     }
     return [PSCustomObject]@{ Out = $out; Err = $err; Code = $LASTEXITCODE }
 }
+
+# ----------------------------------------------------------------------------
+# Memtest SOL 引导菜单预设解析与 grub.cfg 生成
+# ----------------------------------------------------------------------------
+
+# 解析 config/memtest-presets.conf（key=value，跳过空行/# 注释/非法键，风格同 Get-Config）。
+# 返回 [PSCustomObject]@{ Timeout=[int]; Default=[string]; Presets=[array] }，
+# Presets 元素为 [PSCustomObject]@{ Key; Title; Cmdline }，按 conf 出现顺序。
+# 校验：timeout 必须为整数；default 必须存在且指向已收集的 preset key；
+#       每个 preset 的 title 与 cmdline 必须成对存在，否则 throw。
+function Get-MemtestPresets {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "预设配置文件不存在: $Path"
+    }
+
+    $timeout = -1
+    $default = ""
+    $presetKeys = New-Object System.Collections.Generic.List[string]
+    $titles = @{}
+    $cmdlines = @{}
+
+    # 显式 UTF8 读取：预设 conf 为 UTF-8 无 BOM（PS5.1 Get-Content 默认 ANSI 会把中文解成乱码）
+    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        $t = $line.Trim()
+        if ($t -eq '' -or $t.StartsWith('#')) { continue }
+        $idx = $t.IndexOf('=')
+        if ($idx -lt 0) { continue }   # 非法键（无 =）跳过
+        $key = $t.Substring(0, $idx).Trim()
+        if ($key -eq '') { continue }
+        $val = $t.Substring($idx + 1).Trim()
+
+        if ($key -eq 'timeout') {
+            if ($val -notmatch '^\d+$') { throw "timeout 必须为整数: '$val'" }
+            $timeout = [int]$val
+        }
+        elseif ($key -eq 'default') {
+            $default = $val
+        }
+        elseif ($key.StartsWith('preset.') -and $key.EndsWith('.title')) {
+            $pkey = $key.Substring(7, $key.Length - 7 - 6)
+            if (-not $presetKeys.Contains($pkey)) { $presetKeys.Add($pkey) }
+            $titles[$pkey] = $val
+        }
+        elseif ($key.StartsWith('preset.') -and $key.EndsWith('.cmdline')) {
+            $pkey = $key.Substring(7, $key.Length - 7 - 8)
+            if (-not $presetKeys.Contains($pkey)) { $presetKeys.Add($pkey) }
+            $cmdlines[$pkey] = $val
+        }
+    }
+
+    if ($timeout -lt 0) { throw "配置缺少 timeout" }
+    if ($default -eq '') { throw "配置缺少 default" }
+
+    $presets = @()
+    foreach ($pkey in $presetKeys) {
+        if (-not $titles.ContainsKey($pkey)) { throw "预设 '$pkey' 缺少 title" }
+        if (-not $cmdlines.ContainsKey($pkey)) { throw "预设 '$pkey' 缺少 cmdline" }
+        $presets += [PSCustomObject]@{ Key = $pkey; Title = $titles[$pkey]; Cmdline = $cmdlines[$pkey] }
+    }
+
+    if ($presets.Count -eq 0) { throw "配置未包含任何 preset" }
+    $defaultIdx = -1
+    for ($i = 0; $i -lt $presets.Count; $i++) {
+        if ($presets[$i].Key -eq $default) { $defaultIdx = $i; break }
+    }
+    if ($defaultIdx -lt 0) { throw "default 未匹配到预设: '$default'" }
+
+    return [PSCustomObject]@{ Timeout = $timeout; Default = $default; Presets = $presets }
+}
+
+# 由预设生成 grub.cfg 全文（string）：set timeout / set default / search 兜底行 + 每个预设的
+# menuentry 块（linux <KernelPath> [Cmdline]）。-TimeoutSeconds/-DefaultIndex 缺省(-1)时用 Presets 值。
+function ConvertTo-GrubCfg {
+    param($Presets, [int]$TimeoutSeconds = -1, [int]$DefaultIndex = -1, [string]$KernelPath = "/BOOT/MT86PLUS.BIN")
+
+    $timeout = if ($TimeoutSeconds -ge 0) { $TimeoutSeconds } else { $Presets.Timeout }
+    $defaultIdx = $DefaultIndex
+    if ($defaultIdx -lt 0) {
+        $defaultIdx = -1
+        for ($i = 0; $i -lt $Presets.Presets.Count; $i++) {
+            if ($Presets.Presets[$i].Key -eq $Presets.Default) { $defaultIdx = $i; break }
+        }
+        if ($defaultIdx -lt 0) { throw "default 未匹配到预设: '$($Presets.Default)'" }
+    }
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine("set timeout=$timeout")
+    [void]$sb.AppendLine("set default=$defaultIdx")
+    [void]$sb.AppendLine("search --no-floppy --set=root --file $KernelPath")
+    foreach ($preset in $Presets.Presets) {
+        [void]$sb.AppendLine("menuentry `"$($preset.Title)`" {")
+        if ($preset.Cmdline -eq '') {
+            [void]$sb.AppendLine("  linux $KernelPath")
+        } else {
+            [void]$sb.AppendLine("  linux $KernelPath $($preset.Cmdline)")
+        }
+        [void]$sb.AppendLine("  boot")
+        [void]$sb.AppendLine("}")
+    }
+    return $sb.ToString()
+}

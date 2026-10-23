@@ -32,5 +32,8 @@ tmp/
 memtest/tools/python/
 
 # ISO 构建工具（构建机本地下载，不入库；grub/qemu 均按需 -DownloadGrub/-DownloadQemu 获取）
+# 注：含中间斜杠的 pattern 相对 .gitignore 所在目录锚定，故仓库根与 kit 副本各列一条
 tools/grub/
 tools/qemu/
+memtest/tools/grub/
+memtest/tools/qemu/

@@ -4,7 +4,7 @@
 > 每条命令给两行：**原格式**（通用占位符）+ **本机版**（已填好，复制即用）。
 
 > 状态：[当前有效]（2026-10-22）
-> 变更记录：2026-10-22 文档体系编号化（对齐 disk-tests）；工程基建优化更新
+> 变更记录：2026-10-22 文档体系编号化（对齐 disk-tests）；工程基建优化更新；新增菜单版 ISO（memtest-sol.iso）引导与构建说明
 
 > 适用：服务器批量内存验收场景，**全自动、无人值守**。SOL（Serial over LAN，串口网络化）让 Windows 编排器远程抓到 Memtest86+ 的机器可解析日志（MTLOG），跑完自动汇总报告。
 > 对应脚本：[Run-MemtestSuite.ps1](computer://c:\Users\ganxin01\Documents\trae-work\memory-tests\scripts\Run-MemtestSuite.ps1) 的 `-BootMethod SOL`。
@@ -80,6 +80,28 @@ Windows 编排器：ipmitool sol activate 抓流 → 写文件 → 解析 MTLOG
 > - `log=` 输出机器可解析 MTLOG 到串口（与 `console=` 互斥，log 优先）
 > - `maxpasses=4` 跑完 4 轮输出 `ev=done` 后自动重启回系统（**这就是全自动的关键**）
 > - `testlist=0,1,2,3` 可选，只跑指定测试（快速筛选）
+
+### 4.1 菜单版 ISO（memtest-sol.iso，推荐）
+
+> 已内置 `memtest\boot\memtest-sol.iso` —— 带 **GRUB 引导菜单**的 UEFI 版 ISO。开机出现菜单，可选 4 轮验收 / 2 轮 / 1 轮快速筛选 / 交互界面，超时 10 秒自动选默认项（4 轮验收），适合 BMC 虚拟介质**无人值守**挂载。
+
+普通 ISO 要在虚拟介质/引导配置里手写引导参数；菜单版把这些参数做进了菜单，**选哪项就按哪项跑**（全部是 log 模式，串口输出 MTLOG，跑满自动重启回系统，与上方手写 `log=ttyS0,115200 maxpasses=N` 等价）：
+
+| 菜单项 | 内置引导参数 | 用途 |
+| --- | --- | --- |
+| 4 轮验收（默认） | `log=ttyS0,115200 maxpasses=4` | 标准验收（超时 10s 自动选） |
+| 2 轮 | `log=ttyS0,115200 maxpasses=2` | 缩短版验收 |
+| 1 轮快速筛选 | `log=ttyS0,115200 maxpasses=1 testlist=0,1,2,3,4,5,6,7,8` | 快速筛不良 |
+| 交互界面 | `nomch` | 手动调试（无串口日志，不自动重启） |
+
+- **改轮数/预设 = 编辑 `config\memtest-presets.conf` 后重跑构建脚本**（约几秒产出新 ISO），不用手改二进制；引导时也可临时在 GRUB 菜单按键选其他预设，不必重新构建：
+  ```powershell
+  # 构建命令无占位符，原格式 = 本机版（复制即用）
+  # 首次构建需联网下载 GRUB；GRUB 已就位后离线可重跑
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\New-MemtestSolIso.ps1
+  ```
+- 注意：**菜单版 ISO 仅支持 UEFI 引导**（不含 Legacy/软盘模拟）；产物自带 El Torito EFI 引导项，OVMF/QEMU 已实测可引导。
+- 构建机需 Python 3（组装 ISO 用）；产物 ISO 运行不需要 Python。完整参数见 [05-使用手册.md](05-使用手册.md) §4.7/4.8。
 
 ---
 
