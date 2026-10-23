@@ -31,9 +31,8 @@ tmp/
 # 便携 Python（内置工具，不入库）
 memtest/tools/python/
 
-# ISO 构建工具（构建机本地下载，不入库；grub/qemu 均按需 -DownloadGrub/-DownloadQemu 获取）
-# 注：含中间斜杠的 pattern 相对 .gitignore 所在目录锚定，故仓库根与 kit 副本各列一条
-tools/grub/
+# ISO 构建工具（构建机本地下载，不入库；qemu 按需 -DownloadQemu 获取）
+# 注：GRUB 2.06（tools/grub）已随本项目入库（约 3.8MB），保证离线构建 ISO；
+#     含中间斜杠的 pattern 相对 .gitignore 所在目录锚定，故仓库根与 kit 副本各列一条
 tools/qemu/
-memtest/tools/grub/
 memtest/tools/qemu/

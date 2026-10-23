@@ -97,7 +97,7 @@ Windows 编排器：ipmitool sol activate 抓流 → 写文件 → 解析 MTLOG
 - **改轮数/预设 = 编辑 `config\memtest-presets.conf` 后重跑构建脚本**（约几秒产出新 ISO），不用手改二进制；引导时也可临时在 GRUB 菜单按键选其他预设，不必重新构建：
   ```powershell
   # 构建命令无占位符，原格式 = 本机版（复制即用）
-  # 首次构建需联网下载 GRUB；GRUB 已就位后离线可重跑
+  # GRUB 已随包内置（tools\grub），离线直接跑；缺失且可联网时加 -DownloadGrub 补下载
   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\New-MemtestSolIso.ps1
   ```
 - 注意：**菜单版 ISO 仅支持 UEFI 引导**（不含 Legacy/软盘模拟）；产物自带 El Torito EFI 引导项，OVMF/QEMU 已实测可引导。
