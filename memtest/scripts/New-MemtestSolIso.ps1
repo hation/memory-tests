@@ -13,9 +13,9 @@
 
 [CmdletBinding()]
 param(
-    [string]$Kernel = '',            # 内核文件（默认 memtest\boot\binaries\mt86p_900_x86_64）
+    [string]$Kernel = '',            # 内核文件（默认自动探测布局：memtest\boot\binaries\... 或 boot\binaries\...）
     [string]$PresetsConf = '',       # 预设配置文件（默认 config\memtest-presets.conf）
-    [string]$OutIso = '',            # 输出 ISO（默认 memtest\boot\memtest-sol.iso）
+    [string]$OutIso = '',            # 输出 ISO（默认随布局：memtest\boot\memtest-sol.iso 或 boot\memtest-sol.iso）
     [string]$GrubDir = '',           # GRUB 工具目录（默认 tools\grub）
     [switch]$DownloadGrub,           # 联网下载 GRUB Windows 构建包并解压到 -GrubDir
     [int]$TimeoutSeconds = -1,       # grub.cfg 超时秒数（覆盖预设）
@@ -42,9 +42,9 @@ New-MemtestSolIso.ps1 - 生成 Memtest86+ SOL 引导 ISO（memtest-sol.iso）
                         [-Smoke] [-DownloadQemu] [-QemuDir <path>] [-Help]
 
 参数:
-  -Kernel          内核文件（默认 memtest\boot\binaries\mt86p_900_x86_64）
+  -Kernel          内核文件（默认自动探测布局：memtest\boot\binaries\mt86p_900_x86_64（仓库）或 boot\binaries\mt86p_900_x86_64（kit 平铺））
   -PresetsConf     预设配置文件（默认 config\memtest-presets.conf）
-  -OutIso          输出 ISO 路径（默认 memtest\boot\memtest-sol.iso）
+  -OutIso          输出 ISO 路径（默认随布局：memtest\boot\memtest-sol.iso（仓库）或 boot\memtest-sol.iso（kit 平铺））
   -GrubDir         GRUB 工具目录（默认 tools\grub；需含 bin\grub-mkimage[.exe|.cmd] 与 lib\grub\x86_64-efi\*.mod）
   -DownloadGrub    联网下载 GRUB 2.06 Windows 构建包（2.12 的 x86_64-efi 产物有
                    _stack_chk_guard 缺陷不可引导）并解压到 -GrubDir
@@ -77,11 +77,20 @@ function Invoke-NativeCmd {
 
 if ($Help) { Print-Help; exit 0 }
 
-# ---------- 默认路径（相对仓库根） ----------
+# ---------- 默认路径（相对脚本父目录；支持仓库布局与 kit 平铺布局两种） ----------
 $Repo = Split-Path -Parent $PSScriptRoot
-if ($Kernel -eq '')      { $Kernel = Join-Path $Repo 'memtest\boot\binaries\mt86p_900_x86_64' }
+# 布局探测：仓库布局 = 源码侧 memtest\boot\binaries\...；kit 平铺布局 = 离线包侧 boot\binaries\...
+# （build.ps1 把 boot/config/tools 平铺到 kit 根，脚本位于 kit\scripts → $Repo 即 kit）
+$repoKernel = Join-Path $Repo 'memtest\boot\binaries\mt86p_900_x86_64'
+$kitKernel = Join-Path $Repo 'boot\binaries\mt86p_900_x86_64'
+$useRepoLayout = (Test-Path -LiteralPath $repoKernel)
+if ($Kernel -eq '') {
+    $Kernel = if ($useRepoLayout) { $repoKernel } else { $kitKernel }
+}
+if ($OutIso -eq '') {
+    $OutIso = if ($useRepoLayout) { Join-Path $Repo 'memtest\boot\memtest-sol.iso' } else { Join-Path $Repo 'boot\memtest-sol.iso' }
+}
 if ($PresetsConf -eq '') { $PresetsConf = Join-Path $Repo 'config\memtest-presets.conf' }
-if ($OutIso -eq '')     { $OutIso = Join-Path $Repo 'memtest\boot\memtest-sol.iso' }
 if ($GrubDir -eq '')    { $GrubDir = Join-Path $Repo 'tools\grub' }
 if ($QemuDir -eq '')    { $QemuDir = Join-Path $Repo 'tools\qemu' }
 
