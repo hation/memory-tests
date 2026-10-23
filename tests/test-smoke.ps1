@@ -51,6 +51,37 @@ if defined MTLOG (
     return $stub
 }
 
+# 有状态 fake qemu stub：首次调用只创建标记文件（%~dp0callmark）并 exit /b 1、不写 mtlog（模拟首选加速器
+# 非法、启动即退）；二次调用才写完整 MTLOG 并 exit /b 0（供"首选加速器失败 → 回退 tcg"用例）。
+function New-FakeQemuStateful([string]$QemuDir, [string[]]$MtlogLines) {
+    New-Item -ItemType Directory -Path $QemuDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $QemuDir "OVMF_CODE.fd") -Value "fake-CODE" -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $QemuDir "OVMF_VARS.fd") -Value "fake-VARS" -Encoding ASCII
+    $echoLines = $MtlogLines | ForEach-Object { '>> "!MTLOG:~5!" echo ' + $_ }
+    $body = @'
+@echo off
+setlocal EnableDelayedExpansion
+if exist "%~dp0callmark" goto :run
+echo 1 > "%~dp0callmark"
+exit /b 1
+:run
+set "MTLOG="
+set "NEXT="
+for %%a in (%*) do (
+    if defined NEXT (
+        set "MTLOG=%%a"
+        set "NEXT="
+    )
+    if "%%a"=="-serial" set "NEXT=1"
+)
+if defined MTLOG (
+    if "!MTLOG:~0,5!"=="file:" (
+'@ + "`n" + ($echoLines -join "`n") + "`n" + "    )`n)`n" + "exit /b 0"
+    $stub = Join-Path $QemuDir "qemu-system-x86_64.cmd"
+    Set-Content -LiteralPath $stub -Value $body -Encoding ASCII
+    return $stub
+}
+
 $defaultConf = @'
 # Memtest SOL 引导菜单预设
 timeout=10
@@ -84,6 +115,7 @@ try {
     $r1 = . $smokeScript -Iso $dummyIso -QemuDir $q1 -TimeLimitSeconds 30
     Assert ($r1.Pass -eq $true) "用例1 Pass=$true（实际 $($r1.Pass)，Reason=$($r1.Reason)）"
     Assert (Test-Path -LiteralPath $r1.Mtlog) "用例1 Mtlog 路径有效"
+    Assert ($r1.Reason -notmatch '回退') "用例1 首选加速器正常运行不回退（$($r1.Reason)）"
 
     # ---- 用例 2：缺 ev=done → Pass=$false 且 Reason 提及 done ----
     $q2 = Join-Path $work "qemu2"
@@ -113,6 +145,7 @@ try {
     $r5 = . $smokeScript -Iso $dummyIso -QemuDir $q5 -TimeLimitSeconds 30
     Assert ($r5.Pass -eq $false) "用例5 Pass=$false（实际 $($r5.Pass)）"
     Assert ($r5.Reason -match '退出码') "用例5 Reason 提及退出码（$($r5.Reason)）"
+    Assert ($r5.Reason -notmatch '回退') "用例5 MTLOG 有输出时不回退（$($r5.Reason)）"
 
     # ---- 用例 6：ev=done 后 QEMU 延迟自然退出（stub 写 done 后 sleep ~8s 再退出 0）→ Pass=$true ----
     # （回归评审 I1：旧实现检测到 done 后立即强杀 → 退出码非 0 误判；新实现等待自然退出）
@@ -208,6 +241,24 @@ param([string]$Iso, [string]$QemuDir, [switch]$DownloadQemu, [int]$TimeLimitSeco
     Assert ($code7 -eq 1) "用例10 冒烟失败退出码 1（实际 $code7）"
     Assert (Test-Path -LiteralPath $outIso7) "用例10 冒烟失败仍产出正式 ISO"
     Assert ($out7 -match '未验证') "用例10 输出含'未验证'"
+
+    # ---- 用例 11：首选加速器（默认 whpx）启动即失败 → 自动回退 tcg 重试一次 → Pass=$true 且 Reason 提及回退 ----
+    # （回归集成缺陷：QEMU 11.1.0 拒绝 -accel whpx:tcg 报 "invalid accelerator"、启动即退出码 1，mtlog 无输出；
+    #   修复后应先跑 whpx 失败 → 回退 tcg 再跑一次并成功）
+    $ErrorActionPreference = 'Continue'   # 用例 8 dot-source 泄漏 Stop，恢复
+    $q11 = Join-Path $work "qemu11"
+    New-FakeQemuStateful $q11 $fullMtlog
+    $r11 = . $smokeScript -Iso $dummyIso -QemuDir $q11 -TimeLimitSeconds 30
+    Assert ($r11.Pass -eq $true) "用例11 回退 tcg 后 Pass=$true（实际 $($r11.Pass)，Reason=$($r11.Reason)）"
+    Assert ($r11.Reason -match '回退') "用例11 Reason 提及回退 tcg（$($r11.Reason)）"
+    Assert (Test-Path -LiteralPath (Join-Path $q11 "callmark")) "用例11 首次调用（退出码 1）确实发生过"
+
+    # ---- 用例 12：显式 -Accel tcg（无 tcg 兜底）启动即失败 → 不回退 → Pass=$false 且 Reason 不提及回退 ----
+    $q12 = Join-Path $work "qemu12"
+    New-FakeQemuStateful $q12 $fullMtlog
+    $r12 = . $smokeScript -Iso $dummyIso -QemuDir $q12 -TimeLimitSeconds 30 -Accel tcg
+    Assert ($r12.Pass -eq $false) "用例12 -Accel tcg 无兜底 Pass=$false（实际 $($r12.Pass)，Reason=$($r12.Reason)）"
+    Assert ($r12.Reason -notmatch '回退') "用例12 Reason 不提及回退（$($r12.Reason)）"
 
     Remove-Item Env:MT_SMOKE_SCRIPT -ErrorAction SilentlyContinue
 } finally {
