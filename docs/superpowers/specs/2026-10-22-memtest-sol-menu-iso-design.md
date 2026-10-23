@@ -25,7 +25,7 @@ BMC 虚拟介质挂载的 ISO 是只读的，挂载后无法改参数。
 
 ### 目标
 - 产出一个可引导 ISO（**纯 UEFI x86_64**），引导即出现 GRUB 菜单，含多个
-  Memtest86+ 引导参数预设；超时（默认 10s）自动进入默认项，保证无人值守可用。
+  Memtest86+ 引导参数预设；超时（默认 20s）自动进入默认项，保证无人值守可用。
 - 预设可编辑：改轮数/测试项 = 改一个配置文件，重跑工具即可，不手改二进制。
 - 工具作为本项目正式工具入仓库：`scripts/New-MemtestSolIso.ps1` + 预设配置
   `config/memtest-presets.conf` + ISO 组装辅助 + QEMU 冒烟脚本 + 文档更新。
@@ -94,7 +94,7 @@ memtest-sol.iso
 ### 4.2 grub.cfg 菜单（由预设生成）
 
 ```cfg
-set timeout=10
+set timeout=20
 set default=0
 # 兜底：不依赖 BMC 虚拟介质设备路径推断，按文件定位根设备
 search --no-floppy --set=root --file /BOOT/MT86PLUS.BIN
@@ -122,7 +122,7 @@ menuentry "Memtest86+ 交互界面（无串口日志）" {
 
 ```
 # Memtest SOL 引导菜单预设
-timeout=10
+timeout=20
 default=4轮验收
 preset.4轮验收.title=Memtest86+ 4轮完整验收（SOL）
 preset.4轮验收.cmdline=log=ttyS0,115200 maxpasses=4
@@ -236,7 +236,7 @@ preset.交互.cmdline=nomch
   ESP 镜像），已实证 OVMF 兼容（无 El Torito 时 OVMF 掉进 Shell）。
 - **允许联网下载** GRUB2（2.06，2.12 为已知坏包）+ QEMU/OVMF 到 `tools/` 缓存
   （用户拍板），之后离线。
-- 菜单默认项 = 4 轮验收，超时 10s（无人值守优先）。
+- 菜单默认项 = 4 轮验收，超时 20s（无人值守优先）。
 - ISO9660 用**大写 8.3 文件名 + Level-2 目录标识符，无 Joliet/无 RockRidge**
   （复核 Q2：GRUB 不认 Joliet，大写路径自洽最简）。
 - grub.cfg 开头加 `search --file /BOOT/MT86PLUS.BIN` 兜底（复核 Q5）。
