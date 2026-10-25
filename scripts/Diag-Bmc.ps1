@@ -132,6 +132,8 @@ try {
     if ($p) { try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {} }
 }
 Start-Sleep -Milliseconds 500
+# 释放 SOL 通道：探测强杀进程后 BMC 可能残留 payload（报 "already active"），主动 sol deactivate（失败忽略）
+& $IpmiTool @($a + @("sol", "deactivate")) 2>$null | Out-Null
 if (Test-Path $solErrFile) {
     $errRaw = Get-Content $solErrFile -Raw -ErrorAction SilentlyContinue
     if ($null -ne $errRaw) { $solErrText = $errRaw.Trim() }

@@ -144,6 +144,8 @@ if ($BmcHost -ne "" -and (Test-Path -LiteralPath $IpmiTool)) {
             $hasOut = (Test-Path $solOut) -and ((Get-Item $solOut).Length -gt 0)
             try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
             Start-Sleep -Milliseconds 500
+            # 释放 SOL 通道：探测强杀进程后 BMC 可能残留 payload（报 "already active"），主动 sol deactivate（失败忽略）
+            & $IpmiTool @($a + @("sol", "deactivate")) 2>$null | Out-Null
             if ($hasOut) { $oob.SolAvailable = $true }
             Remove-Item $solOut, "$solOut.err" -Force -ErrorAction SilentlyContinue
         }
