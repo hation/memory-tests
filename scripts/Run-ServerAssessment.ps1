@@ -63,8 +63,8 @@ Write-Host "===== 服务器测试能力一键评估：$MachineName ====="
 # 密码：指定 BMC 且未显式提供 → 管道/交互提示一次（置于 $CapScript 调用之前）
 if ($BmcHost -and -not $BmcPass) { $BmcPass = Read-BmcPass -Prompt "BMC 密码（$BmcHost）" }
 
-# ---- 调用能力探测脚本（-OutCsv 落盘结构化结果） ----
-$capCsv = Join-Path $env:TEMP ("cap_" + [guid]::NewGuid().ToString("N") + ".csv")
+# ---- 调用能力探测脚本（-OutCsv 落盘结构化结果；写入项目内 results\assessment，保留可追溯） ----
+$capCsv = Join-Path $OutDir ("$MachineName-cap.csv")
 # 用 hashtable splat 可靠绑定命名参数（数组 splat 传 -Local 开关会失效）
 $capArgs = @{ IpmiTool = $IpmiTool; OutCsv = $capCsv }
 if ($Local) { $capArgs['Local'] = $true }
@@ -156,5 +156,3 @@ if ($out -gt 0) {
 $sumTxt = Join-Path $OutDir "$MachineName-assessment.txt"
 $lines | Out-File -LiteralPath $sumTxt -Encoding UTF8
 Write-Host "汇总文本已保存: $sumTxt"
-
-Remove-Item -LiteralPath $capCsv -Force -ErrorAction SilentlyContinue
