@@ -91,6 +91,7 @@ Windows 编排器：ipmitool sol activate 抓流 → 写文件 → 解析 MTLOG
 | --- | --- | --- |
 | 4 轮验收（默认） | `log=ttyS0,115200 maxpasses=4` | 标准验收（超时 20s 自动选） |
 | 2 轮 | `log=ttyS0,115200 maxpasses=2` | 缩短版验收 |
+| 1 轮全项 | `log=ttyS0,115200 maxpasses=1` | 全 13 项测 1 遍（逐步测试用） |
 | 1 轮快速筛选 | `log=ttyS0,115200 maxpasses=1 testlist=0,1,2,3,4,5,6,7,8` | 快速筛不良 |
 | 交互界面 | `nomch` | 手动调试（无串口日志，不自动重启） |
 

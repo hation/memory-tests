@@ -51,7 +51,7 @@ memtest/
 | --- | --- | --- |
 | 编排脚本 ×9 | ✅ 已含 | 含 check_env 环境自检、能力评估、菜单版 ISO 构建/冒烟工具；PowerShell 5.1 原生可跑（iso9660_build.py 需 Python 3） |
 | Memtest86+ v9.00 ISO | ✅ 已内置 | `boot\memtest.iso`（6.2MB，无需下载） |
-| **memtest-sol.iso（菜单版 UEFI ISO）** | ✅ **已内置** | `boot\memtest-sol.iso`，GRUB 引导菜单（4轮验收/2轮/1轮筛选/交互），超时 20s 自动选默认，BMC 虚拟介质无人值守用 |
+| **memtest-sol.iso（菜单版 UEFI ISO）** | ✅ **已内置** | `boot\memtest-sol.iso`，GRUB 引导菜单（1轮全项/2轮/4轮验收/1轮筛选/交互），超时 20s 自动选默认，BMC 虚拟介质无人值守用 |
 | **New-MemtestSolIso.ps1 / Smoke-MemtestIso.ps1** | ✅ **已含** | `scripts\`，菜单版 ISO 构建/冒烟工具（构建机需 Python 3；产物 ISO 运行不需要 Python） |
 | **memtest-presets.conf** | ✅ **已含** | `config\memtest-presets.conf`，菜单版 ISO 预设配置（改轮数/预设后重跑构建脚本） |
 | Memtest86+ binaries | ✅ 已含 | x86_64 等架构 EFI 负载 |
