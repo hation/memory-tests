@@ -221,7 +221,7 @@ Write-Host "==> Done. CHECKSUM.txt written ($($lines.Count) files)."
 
 # -Zip：构建后压缩成交付包 <离线包名>.zip（固定命名，如 memtest.zip；放在离线包同级的仓库根目录）
 # 参考 disk-tests scripts/make_deploy_zip.ps1：打包前完整性校验 + .NET ZipArchive 保留空目录
-# 覆盖可靠性：先写 .tmp → 原子替换正式名；失败回滚保留旧包，绝不残留半截包或静默留旧版
+# 覆盖可靠性：先删旧包 → 写 .tmp → 原子替换正式名；失败即无包（不留旧包，避免旧版被误用）
 if ($Zip) {
     $kitName = Split-Path -Leaf $KitDir
     $zipPath = Join-Path $Repo "$kitName.zip"   # 固定命名（版本号写在包内 VERSION / README 首行）
@@ -242,6 +242,8 @@ if ($Zip) {
         }
     }
     Remove-Item -LiteralPath $zipTmp -Force -ErrorAction SilentlyContinue
+    # 打包纪律（AGENTS.md）：先删旧包，再建新包——保证失败后也不残留旧包，杜绝旧版被误用
+    Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
 
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
