@@ -345,6 +345,51 @@ function Get-Config {
     return $cfg
 }
 
+# 合并 Run-MemtestSuite 配置默认值：命令行显式参数($Bound)优先，配置未覆盖的键不返回。
+# Cfg 来自 Get-Config(config/memtest-suite.conf)；返回「需要覆盖的默认值」哈希表。
+function Merge-SuiteConfig {
+    param(
+        [hashtable]$Cfg,    # Get-Config 结果
+        [hashtable]$Bound   # $PSBoundParameters（区分是否显式传参）
+    )
+    $r = @{}
+    $map = @{
+        'BOOT_METHOD'    = 'BootMethod'
+        'BMC_HOST'       = 'BmcHost'
+        'BMC_USER'       = 'BmcUser'
+        'IPMI_TOOL'      = 'IpmiTool'
+        'MAX_PASSES'     = 'MaxPasses'
+        'TEST_LIST'      = 'TestList'
+        'SERIAL_PARAM'   = 'SerialParam'
+        'MONITOR_ECC'    = 'MonitorEcc'
+        'MONITOR_TEMP'   = 'MonitorTemp'
+        'RESTART_LOOP'   = 'RestartLoop'
+        'CONFIRM_SWITCH' = 'ConfirmSwitch'
+        'EXPECTED_CSV'   = 'ExpectedCsv'
+        'LOG_PATH'       = 'LogPath'
+    }
+    foreach ($k in $map.Keys) {
+        $param = $map[$k]
+        if ($Bound.ContainsKey($param)) { continue }
+        $val = $Cfg[$k]
+        if ($null -eq $val -or $val.Trim() -eq '') { continue }
+        switch ($param) {
+            { $_ -in 'MonitorEcc', 'MonitorTemp', 'ConfirmSwitch' } {
+                $r[$param] = ($val -match '^(1|true|yes)$')
+            }
+            { $_ -in 'MaxPasses', 'RestartLoop' } {
+                $n = 0
+                if ([int]::TryParse($val, [ref]$n)) { $r[$param] = $n }
+            }
+            'BootMethod' {
+                if ($val -in @('SOL', 'USB', 'EFI', 'Serial')) { $r[$param] = $val }
+            }
+            default { $r[$param] = $val }
+        }
+    }
+    return $r
+}
+
 # 时间戳日志输出：[HH:mm:ss] LEVEL msg
 function Write-Log {
     param([string]$Msg, [string]$Level = "INFO")

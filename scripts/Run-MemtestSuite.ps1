@@ -119,6 +119,11 @@ Memtest86+ 自动化编排与压测报告汇总工具
     exit 0
 }
 
+# 配置化默认参数：命令行显式参数优先，其次 config/memtest-suite.conf，最后脚本内置默认
+$suiteCfg = Get-Config -Path (Join-Path $PSScriptRoot '..\config\memtest-suite.conf')
+$suiteDef = Merge-SuiteConfig -Cfg $suiteCfg -Bound $PSBoundParameters
+foreach ($k in $suiteDef.Keys) { Set-Variable -Name $k -Value $suiteDef[$k] }
+
 # 管道密码优先：脚本顶层 $input 可读外部管道（Read-BmcPass 的函数作用域内读不到，故在此先消费，
 # 否则 -File 模式管道场景会落入 Read-Host 等待控制台而挂起）。
 $pipeIn = @($input)
