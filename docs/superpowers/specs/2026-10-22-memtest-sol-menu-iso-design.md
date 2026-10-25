@@ -123,13 +123,19 @@ menuentry "Memtest86+ 交互界面（无串口日志）" {
 ```
 # Memtest SOL 引导菜单预设
 timeout=20
-default=4轮验收
-preset.4轮验收.title=Memtest86+ 4轮完整验收（SOL）
-preset.4轮验收.cmdline=log=ttyS0,115200 maxpasses=4
-preset.2轮.title=Memtest86+ 2轮（SOL）
-preset.2轮.cmdline=log=ttyS0,115200 maxpasses=2
-preset.1轮快速筛选.title=Memtest86+ 1轮快速筛选（SOL）
-preset.1轮快速筛选.cmdline=log=ttyS0,115200 maxpasses=1 testlist=0,1,2,3,4,5,6,7,8
+default=4轮全项
+preset.4轮全项.title=Memtest86+ 4轮全项（SOL）
+preset.4轮全项.cmdline=log=ttyS0,115200 maxpasses=4
+preset.4轮快筛.title=Memtest86+ 4轮快筛（SOL）
+preset.4轮快筛.cmdline=log=ttyS0,115200 maxpasses=4 testlist=0,1,2,3,4,5,6,7,8
+preset.2轮全项.title=Memtest86+ 2轮全项（SOL）
+preset.2轮全项.cmdline=log=ttyS0,115200 maxpasses=2
+preset.2轮快筛.title=Memtest86+ 2轮快筛（SOL）
+preset.2轮快筛.cmdline=log=ttyS0,115200 maxpasses=2 testlist=0,1,2,3,4,5,6,7,8
+preset.1轮全项.title=Memtest86+ 1轮全项（SOL）
+preset.1轮全项.cmdline=log=ttyS0,115200 maxpasses=1
+preset.1轮快筛.title=Memtest86+ 1轮快筛（SOL）
+preset.1轮快筛.cmdline=log=ttyS0,115200 maxpasses=1 testlist=0,1,2,3,4,5,6,7,8
 preset.交互.title=Memtest86+ 交互界面（无串口日志）
 preset.交互.cmdline=nomch
 ```

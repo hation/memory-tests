@@ -83,16 +83,18 @@ Windows 编排器：ipmitool sol activate 抓流 → 写文件 → 解析 MTLOG
 
 ### 4.1 菜单版 ISO（memtest-sol.iso，推荐）
 
-> 已内置 `memtest\boot\memtest-sol.iso` —— 带 **GRUB 引导菜单**的 UEFI 版 ISO。开机出现菜单，可选 4 轮验收 / 2 轮 / 1 轮快速筛选 / 交互界面，超时 20 秒自动选默认项（4 轮验收），适合 BMC 虚拟介质**无人值守**挂载。
+> 已内置 `memtest\boot\memtest-sol.iso` —— 带 **GRUB 引导菜单**的 UEFI 版 ISO。开机出现菜单，可选 4轮全项 / 4轮快筛 / 2轮全项 / 2轮快筛 / 1轮全项 / 1轮快筛 / 交互界面，超时 20 秒自动选默认项（4轮全项），适合 BMC 虚拟介质**无人值守**挂载。
 
 普通 ISO 要在虚拟介质/引导配置里手写引导参数；菜单版把这些参数做进了菜单，**选哪项就按哪项跑**：前三个 SOL 预设都是 log 模式，串口输出 MTLOG，跑满自动重启回系统（与上方手写 `log=ttyS0,115200 maxpasses=N` 等价）；「交互界面」预设为界面手动操作（`nomch`，无串口日志、不自动重启），适合有人值守或先界面调参再测：
 
 | 菜单项 | 内置引导参数 | 用途 |
 | --- | --- | --- |
-| 4 轮验收（默认） | `log=ttyS0,115200 maxpasses=4` | 标准验收（超时 20s 自动选） |
-| 2 轮 | `log=ttyS0,115200 maxpasses=2` | 缩短版验收 |
-| 1 轮全项 | `log=ttyS0,115200 maxpasses=1` | 全 13 项测 1 遍（逐步测试用） |
-| 1 轮快速筛选 | `log=ttyS0,115200 maxpasses=1 testlist=0,1,2,3,4,5,6,7,8` | 快速筛不良 |
+| 4 轮全项（默认） | `log=ttyS0,115200 maxpasses=4` | 标准验收（超时 20s 自动选） |
+| 4 轮快筛 | `log=ttyS0,115200 maxpasses=4 testlist=0,1,2,3,4,5,6,7,8` | 前 9 项×4 轮 |
+| 2 轮全项 | `log=ttyS0,115200 maxpasses=2` | 全 13 项×2 轮 |
+| 2 轮快筛 | `log=ttyS0,115200 maxpasses=2 testlist=0,1,2,3,4,5,6,7,8` | 前 9 项×2 轮 |
+| 1 轮全项 | `log=ttyS0,115200 maxpasses=1` | 全 13 项×1 轮 |
+| 1 轮快筛 | `log=ttyS0,115200 maxpasses=1 testlist=0,1,2,3,4,5,6,7,8` | 前 9 项×1 轮 |
 | 交互界面 | `nomch` | 手动调试（无串口日志，不自动重启） |
 
 - **改轮数/预设 = 编辑 `config\memtest-presets.conf` 后重跑构建脚本**（约几秒产出新 ISO），不用手改二进制；引导时也可临时在 GRUB 菜单按键选其他预设，不必重新构建：
