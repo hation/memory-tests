@@ -25,6 +25,13 @@ Assert ($v.Status -eq 'FAIL' -and $v.Conclusion -match '中断') "FAIL 多次sta
 $v = Get-OrTVerdict -ActualMinutes 4325 -TargetMinutes 4320 -Errors 0 -EccErrors 0 `
       -StartEventCount 1 -MaxEventGapMin 120 -Stalled $false -MaxTempC 72 -TempSamples 72 -TempLimitC 85
 Assert ($v.Status -eq 'FAIL' -and $v.Conclusion -match '中断') "FAIL ts间隔"
+# GapLimitMin 参数（裁定②）：默认 30；45min 间隔在默认阈值下判中断，放宽到 60 后 PASS
+$v = Get-OrTVerdict -ActualMinutes 4325 -TargetMinutes 4320 -Errors 0 -EccErrors 0 `
+      -StartEventCount 1 -MaxEventGapMin 45 -GapLimitMin 30 -Stalled $false -MaxTempC 72 -TempSamples 72 -TempLimitC 85
+Assert ($v.Status -eq 'FAIL' -and $v.Conclusion -match '中断') "FAIL GapLimitMin=30"
+$v = Get-OrTVerdict -ActualMinutes 4325 -TargetMinutes 4320 -Errors 0 -EccErrors 0 `
+      -StartEventCount 1 -MaxEventGapMin 45 -GapLimitMin 60 -Stalled $false -MaxTempC 72 -TempSamples 72 -TempLimitC 85
+Assert ($v.Status -eq 'PASS') "PASS GapLimitMin=60"
 # 捕获停滞（SOL 断线）
 $v = Get-OrTVerdict -ActualMinutes 4325 -TargetMinutes 4320 -Errors 0 -EccErrors 0 `
       -StartEventCount 1 -MaxEventGapMin 5 -Stalled $true -MaxTempC 72 -TempSamples 72 -TempLimitC 85

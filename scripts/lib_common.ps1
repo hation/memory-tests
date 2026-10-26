@@ -699,7 +699,8 @@ function Get-OrTVerdict {
         [bool]$Stalled,
         [double]$MaxTempC,
         [int]$TempSamples,
-        [double]$TempLimitC
+        [double]$TempLimitC,
+        [int]$GapLimitMin = 30
     )
 
     $status = 'PASS'
@@ -716,7 +717,7 @@ function Get-OrTVerdict {
         $status = 'FAIL'
         $reason = "存在ECC错误(EccErrors=$EccErrors)"
     }
-    elseif ($StartEventCount -gt 1 -or $MaxEventGapMin -gt 30 -or $Stalled) {
+    elseif ($StartEventCount -gt 1 -or $MaxEventGapMin -gt $GapLimitMin -or $Stalled) {
         $status = 'FAIL'
         $reason = "测试中断(StartEventCount=$StartEventCount, MaxEventGapMin=${MaxEventGapMin} min, Stalled=$Stalled)"
     }
@@ -759,6 +760,23 @@ function Get-OrTLogMetrics {
         }
     }
     return [PSCustomObject]@{ StartEventCount = $startCount; MaxEventGapMin = $maxGapMin; LogSpanMinutes = $spanMin }
+}
+
+# FR-11 温度监控（可选）：SOL 方式下通过 IPMI 读取温度传感器（含 DIMM 温度）
+function Get-IPMITempSensors {
+    param([string]$BmcHost, [string]$BmcUser, [string]$BmcPass, [string]$IpmiTool)
+
+    $a = @("-I", "lanplus", "-H", $BmcHost)
+    if ($BmcUser) { $a += @("-U", $BmcUser) }
+    if ($BmcPass) { $a += @("-P", $BmcPass) }
+    $out = & $IpmiTool @($a + @("sdr", "elist")) 2>$null
+    $temps = @()
+    foreach ($line in $out) {
+        if ($line -match '^\s*([^|]+?)\s*\|\s*([\d.]+)\s+degrees C') {
+            $temps += [PSCustomObject]@{ Sensor = $matches[1].Trim(); TempC = [double]$matches[2] }
+        }
+    }
+    return $temps
 }
 
 # 温度采样后台 Job：dot-source LibPath 后每 IntervalMin 分钟调一次 Get-IPMITempSensors，
@@ -849,6 +867,7 @@ function Export-OrTReport {
         [double]$MaxTempC,
         [int]$TempSamples,
         [bool]$Stalled = $false,
+        [int]$GapLimitMin = 30,
         [string]$ReportDir,
         [string]$LogPath
     )
@@ -856,7 +875,7 @@ function Export-OrTReport {
     $startTime = if ($CaptureStart -is [datetime]) { $CaptureStart.ToString("yyyy-MM-dd HH:mm:ss") } else { [string]$CaptureStart }
     $endTime   = if ($CaptureEnd -is [datetime])   { $CaptureEnd.ToString("yyyy-MM-dd HH:mm:ss") }   else { [string]$CaptureEnd }
     $totalPasses = if ($Summary) { $Summary.PassesCompleted } else { 0 }
-    $interrupted = ($Metrics.StartEventCount -gt 1) -or ($Metrics.MaxEventGapMin -gt 30) -or $Stalled
+    $interrupted = ($Metrics.StartEventCount -gt 1) -or ($Metrics.MaxEventGapMin -gt $GapLimitMin) -or $Stalled
 
     $row = [PSCustomObject]@{
         Batch           = $BatchName
