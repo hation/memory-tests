@@ -47,6 +47,7 @@ Assert ($t.Out -match '角色: 被测服务器') "unreachable → 角色行=被�
 Assert ((Import-Csv $t.Csv)[0].Role -eq '被测服务器') "unreachable → cap CSV Role=被测服务器"
 Assert ((Get-CapStatus $t.Csv 10) -match '^需编排机') "unreachable → 第10项需编排机"
 Assert ((Get-CapStatus $t.Csv 1) -match '^可测') "unreachable → 自动跑带内(第1项可测)"
+Assert ($t.Out -match '若本机实为编排机且 BMC 应可达') "unreachable → 输出防护提示"
 
 # 凭据失败：auth（不跑带内，如实报告）
 $t = Run-Caps 'auth' @()
@@ -83,6 +84,12 @@ Assert ((Get-CapStatus $t.Csv 10) -match '未观察到掉电跳变') "flat → �
 # off → 关机中止（不发 power cycle）
 $t = Run-Caps 'verify-off' @('-VerifyPowerCycle')
 Assert ((Get-CapStatus $t.Csv 10) -match '服务器当前关机') "off → 关机中止文案"
+
+# cycle 后恒 off：收尾确认未回 on → 不得报"已验证"，回落人工确认文案
+Remove-Item $env:TEMP\fake_ipmi_pwrcount -ErrorAction SilentlyContinue
+$t = Run-Caps 'verify-cycle-off' @('-VerifyPowerCycle')
+Assert ((Get-CapStatus $t.Csv 10) -notmatch '已验证') "cycle-off → 不得报已验证"
+Assert ((Get-CapStatus $t.Csv 10) -match '未观察到掉电跳变') "cycle-off → 回落人工确认文案"
 
 # unreachable + -VerifyPowerCycle → 仍需编排机，不挂起
 $t = Run-Caps 'unreachable' @('-VerifyPowerCycle')

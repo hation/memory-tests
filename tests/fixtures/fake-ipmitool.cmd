@@ -1,6 +1,6 @@
 @echo off
 rem fake-ipmitool.cmd - multi-mode BMC simulator driven by FAKE_IPMI_MODE
-rem modes: ok (default) / unreachable / auth / verify-transition / verify-flat / verify-off
+rem modes: ok (default) / unreachable / auth / verify-transition / verify-flat / verify-off / verify-cycle-off
 rem usage: set FAKE_IPMI_MODE=<mode> then & tests\fixtures\fake-ipmitool.cmd <args> <subcmd>
 setlocal
 
@@ -41,11 +41,28 @@ exit /b 0
 
 :chassis_power_status
 if "%FAKE_IPMI_MODE%"=="verify-transition" goto :status_transition
+if "%FAKE_IPMI_MODE%"=="verify-cycle-off" goto :status_cycle_off
 if "%FAKE_IPMI_MODE%"=="verify-off" (
     echo Chassis Power is off
     exit /b 0
 )
 echo Chassis Power is on
+exit /b 0
+
+:status_cycle_off
+rem file-persisted counter: call 1 -> on, call >=2 -> off (cycle 下发后恒 off，不回 on)
+set "countfile=%TEMP%\fake_ipmi_pwrcount"
+set /a c=0
+if not exist "%countfile%" goto :cycle_off_write
+set /p c=<"%countfile%"
+:cycle_off_write
+set /a c+=1
+> "%countfile%" echo %c%
+if %c%==1 (
+    echo Chassis Power is on
+) else (
+    echo Chassis Power is off
+)
 exit /b 0
 
 :status_transition
