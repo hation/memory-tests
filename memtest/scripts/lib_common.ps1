@@ -1058,7 +1058,7 @@ function Export-Prime95Report {
         Passes       = 0
         Errors       = $ErrorCount
         EccErrors    = 0
-        Result       = "Prime95 $($Verdict.Status)"
+        Result       = if ($Verdict -and $Verdict.Status) { "Prime95 $($Verdict.Status)" } else { "Prime95 FAIL" }
     }
     $master = Join-Path $LogPath 'master_manifest.csv'
     $all = New-Object System.Collections.Generic.List[object]
