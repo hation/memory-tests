@@ -20,6 +20,7 @@
 - **单源构建**：`scripts\build.ps1` 一键同步离线包，VERSION 单一来源。
 - **JSON 事件流**：主流程输出一行 JSON 事件，供日志/GUI 等外部工具消费。
 - **历史库（可选）**：`db/` SQLite 历史库（需 Python 3），支持导入/查询/导出/合并。
+- **指令记录**：所有脚本自动写入 `results\cmdlog\commands-<日期>.csv`（常开、密码打码），可选会话转录 `scripts\Start-CommandLog.ps1`。
 
 ## 环境要求
 
