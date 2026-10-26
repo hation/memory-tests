@@ -68,6 +68,27 @@ Assert ((Import-Csv $t.Csv)[0].Role -eq '编排机') "-Local -BmcHost → Role=�
 Assert ((Get-CapStatus $t.Csv 1) -match '^可测') "-Local -BmcHost → 带内也执行(第1项可测)"
 Remove-Item $t.Csv, $csv2 -Force -ErrorAction SilentlyContinue
 
+# ============================================================================
+# Task 4 -VerifyPowerCycle 实测断电循环验证
+# ============================================================================
+# transition → 已验证
+Remove-Item $env:TEMP\fake_ipmi_pwrcount -ErrorAction SilentlyContinue
+$t = Run-Caps 'verify-transition' @('-VerifyPowerCycle')
+Assert ((Get-CapStatus $t.Csv 10) -match '可测\(已验证') "transition → 已验证断电重启"
+
+# flat → 未观察跳变
+$t = Run-Caps 'verify-flat' @('-VerifyPowerCycle')
+Assert ((Get-CapStatus $t.Csv 10) -match '未观察到掉电跳变') "flat → 未观察跳变文案"
+
+# off → 关机中止（不发 power cycle）
+$t = Run-Caps 'verify-off' @('-VerifyPowerCycle')
+Assert ((Get-CapStatus $t.Csv 10) -match '服务器当前关机') "off → 关机中止文案"
+
+# unreachable + -VerifyPowerCycle → 仍需编排机，不挂起
+$t = Run-Caps 'unreachable' @('-VerifyPowerCycle')
+Assert ((Get-CapStatus $t.Csv 10) -match '^需编排机') "unreachable+Verify → 第10项需编排机"
+Remove-Item $t.Csv -Force -ErrorAction SilentlyContinue
+
 Write-Host "  [caps] Check-ServerCapabilities 角色化端到端 OK"
 Write-Host ""
 Write-Host "test-assessment-role: ALL PASS"

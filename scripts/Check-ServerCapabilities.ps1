@@ -19,7 +19,7 @@
 #   .\scripts\Check-ServerCapabilities.ps1 -Local                    # 在服务器本机（Windows）跑
 #   .\scripts\Check-ServerCapabilities.ps1 -BmcHost <IP> -BmcUser <u> -BmcPass <p>   # 编排机远程探测（自动判角色）
 #   .\scripts\Check-ServerCapabilities.ps1 -Local -BmcHost <IP> -BmcUser <u> -BmcPass <p> -OutCsv cap.csv
-# （-VerifyPowerCycle 实测断电循环验证：Task 4 接管）
+#   ... -VerifyPowerCycle   # 实测断电循环验证（仅编排机执行；开关本身即同意，不二次确认）
 # ============================================================================
 
 param(
@@ -28,7 +28,8 @@ param(
     [string]$BmcUser = "",
     [string]$BmcPass = "",
     [string]$IpmiTool = "ipmitool",
-    [string]$OutCsv = ""         # 可选：输出能力报告 CSV
+    [string]$OutCsv = "",        # 可选：输出能力报告 CSV
+    [switch]$VerifyPowerCycle    # 实测断电循环验证：下发 chassis power cycle 观察掉电跳变（仅编排机，开关即同意）
 )
 
 $ErrorActionPreference = 'Stop'
@@ -176,6 +177,50 @@ if ($runOob) {
 }
 
 # ---------------------------------------------------------------------------
+# 实测断电循环验证（仅编排机 + -VerifyPowerCycle；开关本身即同意，不再二次确认）
+# 序列：baseline(chassis power status) → 下发 cycle → 轮询观察 off→on → 收尾确认
+# ---------------------------------------------------------------------------
+$verifyItem10 = $null
+if ($runOob -and $VerifyPowerCycle) {
+    # EAP 守卫：顶层 EAP=Stop 会把原生命令 stderr 升级为终止错误，破坏逐调用 {Out;Err;Code}
+    # 捕获；验证逻辑内所有 Invoke-IpmiProbe 调用统一临时切 Continue，finally 恢复。
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        # baseline：服务器必须当前开机，否则中止（绝不发 cycle）
+        $r = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs @($cipherArgs + @('chassis', 'power', 'status'))
+        if ($r.Code -ne 0 -or ($r.Out -join ' ') -notmatch '\bon\b') {
+            $verifyItem10 = '条件: 服务器当前关机，无法验证断电循环（请先开机）'
+        } else {
+            # 下发断电循环
+            $r = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs @($cipherArgs + @('chassis', 'power', 'cycle'))
+            if ($r.Code -ne 0 -or ($r.Out -join ' ') -notmatch 'Cycle') {
+                $verifyItem10 = "条件: BMC 通但断电循环命令不可用($($r.Err -join ' | '))"
+            } else {
+                # 轮询：每 1s，窗口 30s；任一次含 off 记 observedOff，先 off 再见 on 即完成，提前结束
+                $observedOff = $false
+                for ($i = 0; $i -lt 30; $i++) {
+                    Start-Sleep -Seconds 1
+                    $r = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs @($cipherArgs + @('chassis', 'power', 'status'))
+                    $st = ($r.Out -join ' ')
+                    if ($st -match 'off') { $observedOff = $true }
+                    if ($observedOff -and $st -match '\bon\b') { break }
+                }
+                # 收尾：确认 BMC 仍响应且已回到开机
+                $r = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs @($cipherArgs + @('chassis', 'power', 'status'))
+                if ($observedOff) {
+                    $verifyItem10 = '可测(已验证：实测断电重启成功)'
+                } else {
+                    $verifyItem10 = '可测(命令已接受，未观察到掉电跳变，断电窗口极短，建议人工确认一次)'
+                }
+            }
+        }
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 汇总为 17 项可行性
 # ---------------------------------------------------------------------------
 # 项 1-17 名称与判定（带内数据决定可测性；带外决定通道；6-9,11-14 固定外包）
@@ -192,7 +237,8 @@ $item5 = if ($role -eq 'Server') { "需编排机($roleDetail)" }
          elseif ($canPower -and $oob.HasTempSensors) { "可测(需满载72h)" }
          elseif ($canPower) { "条件：需测温传感器" }
          else { "条件: BMC 通但断电循环命令不可用($oob.Error)" }
-$item10 = if ($role -eq 'Server') { "需编排机($roleDetail)" }
+$item10 = if ($null -ne $verifyItem10) { $verifyItem10 }
+          elseif ($role -eq 'Server') { "需编排机($roleDetail)" }
           elseif ($role -eq 'AuthError') { "条件: $roleDetail" }
           elseif ($canPower) { "可测(IPMI 断电循环)" }
           else { "条件: BMC 通但断电循环命令不可用($oob.Error)" }
