@@ -489,8 +489,15 @@ if ($ortMode) {
     Write-Host "===== ORT 模式：目标 $MaxMinutes 分钟，温度上限 $TempLimitC°C，采样间隔 $TempIntervalMin 分钟 ====="
     $captureStart = Get-Date
     $tempCsv = Join-Path $reportDir "$BatchName-temp.csv"
-    $tempJob = Start-OrTTempSampling -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass -IpmiTool $IpmiTool `
-        -IntervalMin $TempIntervalMin -CsvFile $tempCsv -LibPath (Join-Path $PSScriptRoot 'lib_common.ps1')
+    if ($BootMethod -eq 'Serial' -and -not $BmcHost) {
+        # Serial 直连无 BMC：温度采样不可用，跳过 Job；温度判据由 Get-OrTVerdict 在 TempLimitC<=0 时自动关闭
+        $tempJob = $null
+        $tempInfo = [PSCustomObject]@{ MaxTempC = [double]-1; TempSamples = 0 }
+        Write-Warning "ORT Serial 方式无 BMC：温度判据不可用，PASS 需加 -TempLimitC 0（或改用 SOL 方式）"
+    } else {
+        $tempJob = Start-OrTTempSampling -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass -IpmiTool $IpmiTool `
+            -IntervalMin $TempIntervalMin -CsvFile $tempCsv -LibPath (Join-Path $PSScriptRoot 'lib_common.ps1')
+    }
     try {
         $rawLog = Join-Path $rawDir "$BatchName.mtlog.txt"
         if ($BootMethod -eq 'SOL') {
@@ -500,9 +507,10 @@ if ($ortMode) {
             $cap = Invoke-SerialCapture -SerialPortName $SerialPort -BaudRate $BaudRate `
                 -OutFile $rawLog -TimeoutMinutes ($MaxMinutes + $OrtBufferMin) -MaxStallMin $OrtMaxGapMin
         }
-        $tempInfo = Stop-OrTTempSampling -Job $tempJob -CsvFile $tempCsv
+        # 未启动温度采样时（Serial 无 BMC）不调用 Stop（$tempJob 为 $null，Stop-OrTTempSampling 对 $null Job 幂等）
+        if ($null -ne $tempJob) { $tempInfo = Stop-OrTTempSampling -Job $tempJob -CsvFile $tempCsv }
     } catch {
-        Stop-OrTTempSampling -Job $tempJob -CsvFile $tempCsv | Out-Null
+        if ($null -ne $tempJob) { Stop-OrTTempSampling -Job $tempJob -CsvFile $tempCsv | Out-Null }
         throw
     }
     $captureEnd = Get-Date
@@ -524,8 +532,9 @@ if ($ortMode) {
         -TargetMinutes $MaxMinutes -ActualMinutes $actualMin -Summary $summary -Metrics $metrics -Verdict $verdict `
         -MaxTempC $tempInfo.MaxTempC -TempSamples $tempInfo.TempSamples -Stalled $cap.Stalled -GapLimitMin $OrtMaxGapMin `
         -ReportDir $reportDir -LogPath $LogPath
-    Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result ("ORT " + $verdict.Status) -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
-    exit 0   # ORT 分支到此结束（不进入常规 per-slot 报告与 RestartLoop）
+    $ortExitCode = if ($verdict.Status -eq 'FAIL') { 2 } else { 0 }
+    Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result ("ORT " + $verdict.Status) -ExitCode $ortExitCode -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+    exit $ortExitCode   # ORT 分支到此结束（不进入常规 per-slot 报告与 RestartLoop）
 }
 
 # FR-1 识别建档

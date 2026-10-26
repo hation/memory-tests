@@ -731,7 +731,17 @@ function Get-OrTVerdict {
             $reason = "温度超限(超温: MaxTempC=${MaxTempC} 超过上限 ${TempLimitC})"
         }
     }
-    $conclusion = if ($status -eq 'PASS') { "72h 老化通过" } else { $reason }
+    if ($status -eq 'PASS') {
+        # 结论文案按输入动态生成（不硬编码"72h"）：时长 + 无错误/中断 + 温度判据状态
+        $conclusion = "老化通过：{0} 分钟 ≥ 目标 {1} 分钟，Errors=0，ECC=0，无中断" -f $ActualMinutes, $TargetMinutes
+        if ($TempLimitC -gt 0) {
+            $conclusion += "，最高温 {0}°C ≤ {1}°C" -f $MaxTempC, $TempLimitC
+        } else {
+            $conclusion += "，温度判据未启用"
+        }
+    } else {
+        $conclusion = $reason
+    }
     return [PSCustomObject]@{ Status = $status; Conclusion = $conclusion }
 }
 
@@ -747,7 +757,7 @@ function Get-OrTLogMetrics {
     $tsList = @()
     foreach ($ev in $events) {
         $ts = 0.0
-        if ($null -ne $ev.ts -and [double]::TryParse([string]$ev.ts, [ref]$ts)) {
+        if ($null -ne $ev.ts -and [double]::TryParse([string]$ev.ts, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$ts)) {
             $tsList += $ts
         }
     }
