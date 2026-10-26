@@ -124,6 +124,10 @@ $suiteCfg = Get-Config -Path (Join-Path $PSScriptRoot '..\config\memtest-suite.c
 $suiteDef = Merge-SuiteConfig -Cfg $suiteCfg -Bound $PSBoundParameters
 foreach ($k in $suiteDef.Keys) { Set-Variable -Name $k -Value $suiteDef[$k] }
 
+# 指令记录：本次调用入库（Help 已处理；BMC 密码等敏感参数由 Write-CmdLog 打码）
+$scriptStartTime = Get-Date
+Write-CmdLog -Script 'Run-MemtestSuite' -CmdArgs $MyInvocation.Line -State Start
+
 # 管道密码优先：脚本顶层 $input 可读外部管道（Read-BmcPass 的函数作用域内读不到，故在此先消费，
 # 否则 -File 模式管道场景会落入 Read-Host 等待控制台而挂起）。
 $pipeIn = @($input)
@@ -162,6 +166,7 @@ function Invoke-SolCapture {
     )
 
     if (-not $ConfirmSwitch) {
+        Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result 'FAIL: 需 -ConfirmSwitch 确认' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
         throw "SOL 方式涉及引导/重启，需加 -ConfirmSwitch 确认。"
     }
 
@@ -281,6 +286,7 @@ function Invoke-EfiBoot {
     )
 
     if (-not $ConfirmSwitch) {
+        Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result 'FAIL: 需 -ConfirmSwitch 确认' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
         throw "EFI 方式涉及引导/重启，需加 -ConfirmSwitch 确认。"
     }
     if (-not (Test-Path $EfiImage)) {
@@ -415,6 +421,7 @@ if ($ParseOnly) {
     # 仅解析已有日志/报告
     if (-not $LogFile -or -not (Test-Path $LogFile)) {
         Write-Error "ParseOnly 模式需提供有效的 -LogFile"
+        Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result 'FAIL: ParseOnly 缺有效 -LogFile' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
         exit 1
     }
     # 按内容路由：首行是 MTLOG 走串口解析器，否则走文本报告解析器
@@ -425,6 +432,7 @@ if ($ParseOnly) {
         $summary = Invoke-TextReportParser -ReportFile $LogFile
     }
     $summary | ConvertTo-Json -Depth 4
+    Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result $summary.FinalStatus -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 0
 }
 
@@ -435,6 +443,7 @@ Write-Event -Type stage -Data @{stage='orchestrator'; status='start'; batch=$Bat
 $inventory = Get-MemoryInventory -ExpectedCsv $ExpectedCsv -BatchName $BatchName
 if ($inventory.Count -eq 0) {
     Write-Error "识别不到内存，中止。"
+    Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result 'FAIL: 识别不到内存' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 1
 }
 $invFile = Join-Path $LogPath "$BatchName-inventory.csv"
@@ -466,6 +475,7 @@ switch ($BootMethod) {
         # EFI 引导后机器重启，本进程结束；重启后的续测/采集由配套计划任务执行。
         # 本机将重启，capture/parse/done 事件不可达，故此处补一条引导事件供日志追踪。
         Write-Event -Type stage -Data @{stage='efi'; status='boot'; batch=$BatchName}
+        Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result 'OK: EFI 引导已设置，本机将重启' -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
         exit 0
     }
 }
@@ -484,6 +494,7 @@ try {
     }
     if ($null -eq $summary) {
         Write-Error "未获取到 Memtest86+ 日志/报告。"
+        Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result 'FAIL: 未获取到日志/报告' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
         exit 1
     }
 
@@ -546,4 +557,5 @@ if ($RestartLoop -gt 0) {
 }
 
 Write-Host ""
+Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result $summary.FinalStatus -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
 Write-Host "===== 编排完成 ====="

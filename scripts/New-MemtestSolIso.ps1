@@ -63,6 +63,7 @@ New-MemtestSolIso.ps1 - 生成 Memtest86+ SOL 引导 ISO（memtest-sol.iso）
 # 报错并退出 1（ErrorActionPreference=Stop 下 Write-Error 会抛，故用 -ErrorAction Continue + exit）
 function Fail([string]$Msg) {
     Write-Error $Msg -ErrorAction Continue
+    Write-CmdLog -Script 'New-MemtestSolIso' -State End -Result ("FAIL: " + $Msg) -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 1
 }
 
@@ -76,6 +77,10 @@ function Invoke-NativeCmd {
 }
 
 if ($Help) { Print-Help; exit 0 }
+
+# 指令记录：本次调用入库（Help 已处理；所有 Fail 路径统一在 Fail() 内记录 End）
+$scriptStartTime = Get-Date
+Write-CmdLog -Script 'New-MemtestSolIso' -CmdArgs $MyInvocation.Line -State Start
 
 # ---------- 默认路径（相对脚本父目录；支持仓库布局与 kit 平铺布局两种） ----------
 $Repo = Split-Path -Parent $PSScriptRoot
@@ -408,8 +413,10 @@ try {
 # ---------- 8. -Smoke 结果收尾：失败置"未验证"并退出 1（正式 ISO 已产出） ----------
 if ($Smoke -and -not $smokePassed) {
     Write-Host "==> 警告：产物未验证（冒烟失败: $smokeReason）: $OutIso"
+    Write-CmdLog -Script 'New-MemtestSolIso' -State End -Result ("FAIL: 冒烟未通过（" + $smokeReason + "）") -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 1
 }
 
 Write-Host "==> 完成: $OutIso"
+Write-CmdLog -Script 'New-MemtestSolIso' -State End -Result 'OK' -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
 exit 0

@@ -7,6 +7,10 @@
 
 . $PSScriptRoot\lib_common.ps1
 
+# 指令记录：本次调用入库（无参数；Start 在自检开始前）
+$scriptStartTime = Get-Date
+Write-CmdLog -Script 'check_env' -CmdArgs $MyInvocation.Line -State Start
+
 $fail = 0
 $warn = 0
 
@@ -90,11 +94,14 @@ if (Test-Path $dbPy) {
 Write-Host ""
 if ($fail -eq 0 -and $warn -eq 0) {
     Write-Host "环境自检：全部 OK，可开始验收。"
+    Write-CmdLog -Script 'check_env' -State End -Result 'OK' -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 0
 } elseif ($fail -eq 0) {
     Write-Host "环境自检：通过（$warn 项警告，不影响核心功能）。"
+    Write-CmdLog -Script 'check_env' -State End -Result ("OK: " + $warn + " 项警告") -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 0
 } else {
     Write-Host "环境自检：失败 $fail 项，请按 docs/12 手册第一章修复后重试。"
+    Write-CmdLog -Script 'check_env' -State End -Result ("FAIL: " + $fail + " 项失败") -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 1
 }

@@ -23,6 +23,10 @@ $ErrorActionPreference = 'Stop'
 # 共享库（识别/解析等公共逻辑，入库后统一抽取到 lib_common.ps1）
 . $PSScriptRoot\lib_common.ps1
 
+# 指令记录：本次调用入库（param 已解析；无密码类参数）
+$scriptStartTime = Get-Date
+Write-CmdLog -Script 'Identify-Memory' -CmdArgs $MyInvocation.Line -State Start
+
 # ---------- 输出目录 ----------
 $outDir = Join-Path (Split-Path -Parent $PSScriptRoot) "results"
 if (-not (Test-Path $outDir)) {
@@ -36,6 +40,7 @@ if ($BatchName -eq "") { $BatchName = "batch_$stamp" }
 $inventory = @(Get-MemoryInventory -ExpectedCsv $ExpectedCsv -BatchName $BatchName)
 if ($inventory.Count -eq 0) {
     Write-Host "未读取到任何内存信息，请确认内存条已安装且系统正常。"
+    Write-CmdLog -Script 'Identify-Memory' -State End -Result 'FAIL: 未读取到内存信息' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 1
 }
 
@@ -65,3 +70,4 @@ if (Test-Path $master) {
 $allRows += $rows
 $allRows | Export-Csv -Path $master -NoTypeInformation -Encoding UTF8
 Write-Host "累计总表已更新: $master（当前共 $($allRows.Count) 条记录）"
+Write-CmdLog -Script 'Identify-Memory' -State End -Result 'OK' -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds

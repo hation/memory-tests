@@ -14,6 +14,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# 共享库（Write-CmdLog 指令记录；build.ps1 本身不进入离线包，仅构建侧使用）
+. $PSScriptRoot\lib_common.ps1
+
+# 指令记录：本次调用入库（param 已解析；无密码类参数）
+$scriptStartTime = Get-Date
+Write-CmdLog -Script 'build' -CmdArgs $MyInvocation.Line -State Start
+
 # 默认 KitDir = <repo>\memtest（$PSScriptRoot 不能在 param 默认值中使用）
 if ([string]::IsNullOrEmpty($KitDir)) {
     $KitDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'memtest'
@@ -24,6 +31,7 @@ $VERSION_FILE = Join-Path $Repo 'VERSION'
 
 if (-not (Test-Path -LiteralPath $VERSION_FILE)) {
     Write-Error "VERSION file not found: $VERSION_FILE"
+    Write-CmdLog -Script 'build' -State End -Result 'FAIL: VERSION 文件缺失' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 1
 }
 $ver = (Get-Content -LiteralPath $VERSION_FILE -Raw).Trim()
@@ -78,6 +86,7 @@ Sync-Dir -Src $scriptSrc -Dst $scriptDst -Exclude @('build.ps1')
 foreach ($f in $scriptFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $scriptSrc $f))) {
         Write-Error "Source script missing: $f"
+        Write-CmdLog -Script 'build' -State End -Result ("FAIL: 源脚本缺失: " + $f) -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
         exit 1
     }
 }
@@ -162,6 +171,7 @@ $missing = @($required | Where-Object { -not (Test-Path -LiteralPath $_) })
 if ($missing.Count -gt 0) {
     $ErrorActionPreference = 'Continue'
     Write-Error "Missing key files in kit: $($missing -join ', ')"
+    Write-CmdLog -Script 'build' -State End -Result ("FAIL: kit 关键文件缺失: " + ($missing -join ', ')) -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 1
 }
 
@@ -218,6 +228,10 @@ $lines = @($lines | Sort-Object)   # 固定行序，保证幂等
 [System.IO.File]::WriteAllLines($checksumPath, $lines, $utf8NoBom)
 
 Write-Host "==> Done. CHECKSUM.txt written ($($lines.Count) files)."
+# 指令记录：未带 -Zip 时脚本到此结束
+if (-not $Zip) {
+    Write-CmdLog -Script 'build' -State End -Result 'OK' -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+}
 
 # -Zip：构建后压缩成交付包 <离线包名>.zip（固定命名，如 memtest.zip；放在离线包同级的仓库根目录）
 # 参考 disk-tests scripts/make_deploy_zip.ps1：打包前完整性校验 + .NET ZipArchive 保留空目录
@@ -229,6 +243,7 @@ if ($Zip) {
     $zipBak  = "$zipPath.bak"
     if (-not (Test-Path -LiteralPath $checksumPath)) {
         Write-Error "CHECKSUM.txt 缺失，打包被拒绝（先构建生成 CHECKSUM 再打包）"
+        Write-CmdLog -Script 'build' -State End -Result 'FAIL: CHECKSUM.txt 缺失拒绝打包' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
         exit 1
     }
     # 结果目录保留在包内（空目录也留条目，对齐 disk-tests 保留 logs/results）
@@ -282,8 +297,11 @@ if ($Zip) {
         }
         Remove-Item -LiteralPath $zipTmp -Force -ErrorAction SilentlyContinue
         Write-Error ("交付包替换失败（{0} 可能被占用）：{1}。旧包已保留。" -f $zipPath, $_.Exception.Message)
+        Write-CmdLog -Script 'build' -State End -Result 'FAIL: 交付包替换失败' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
         exit 1
     }
     $info = Get-Item $zipPath
     Write-Host ("==> 交付包已生成: {0} ({1} MB, {2} 文件) 版本 {3}（解压后核对 VERSION 或 README 首行）" -f $zipPath, [math]::Round($info.Length/1MB,1), $script:zipCount, $ver)
+    # 指令记录：带 -Zip 的构建成功收尾
+    Write-CmdLog -Script 'build' -State End -Result 'OK' -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
 }
