@@ -73,7 +73,6 @@ if ($Prime95Exe -eq "") { $Prime95Exe = Join-Path (Split-Path -Parent $PSScriptR
 if ($LogPath -eq "") { $LogPath = Join-Path (Split-Path -Parent $PSScriptRoot) "results" }
 $reportDir = Join-Path $LogPath "reports"
 $workDir   = Join-Path $LogPath "work\$BatchName"
-foreach ($d in @($LogPath, $reportDir, $workDir)) { if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }
 
 # 校验
 if ($Minutes -le 0) {
@@ -87,6 +86,9 @@ if (-not (Test-Path -LiteralPath $Prime95Exe)) {
     exit 1
 }
 
+# 校验通过后才建目录（校验失败不留空目录）
+foreach ($d in @($LogPath, $reportDir, $workDir)) { if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }
+
 # 并发防护：检测已有 prime95 进程（同名进程，排除自身 PID）
 $existing = @(Get-Process -Name 'prime95' -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID })
 if ($existing.Count -gt 0) {
@@ -98,34 +100,43 @@ if ($existing.Count -gt 0) {
 # 预置 prime.txt（OutputJSON=0；模式键留待实机冒烟回填，首版不写）
 [System.IO.File]::WriteAllText((Join-Path $workDir 'prime.txt'), "OutputJSON=0`n", (New-Object System.Text.UTF8Encoding($false)))
 
-# 启动：-t 进入 torture；-W<dir> 指定工作目录（results.txt 写进批次目录）。
-# PS5.1 的 Start-Process 将 ArgumentList 数组元素按空格拼接，路径含空格时需显式加引号
-$p = Start-Process -FilePath $Prime95Exe -ArgumentList @("-t", "-W`"$workDir`"") -PassThru -WindowStyle Minimized
-$startTime = Get-Date
-Write-Host "Prime95 已启动（PID $($p.Id)），目标时长 $Minutes 分钟，模式 $Mode，工作目录 $workDir"
+# 主流程：启动 → 轮询 → 判定 → 报告 → cmdlog End → exit 0
+# 运行期异常由 catch 兜底补写 cmdlog End（FAIL）后 exit 1（参照 build.ps1 失败路径风格）
+try {
+    # 启动：-t 进入 torture；-W<dir> 指定工作目录（results.txt 写进批次目录）。
+    # PS5.1 的 Start-Process 将 ArgumentList 数组元素按空格拼接，路径含空格时需显式加引号
+    $p = Start-Process -FilePath $Prime95Exe -ArgumentList @("-t", "-W`"$workDir`"") -PassThru -WindowStyle Minimized
+    $startTime = Get-Date
+    Write-Host "Prime95 已启动（PID $($p.Id)），目标时长 $Minutes 分钟，模式 $Mode，工作目录 $workDir"
 
-# 轮询循环（每 30s）：进程 HasExited 为主 + results.txt 错误扫描 + 时长判定
-$errors = 0; $exitedEarly = $false
-$stats = $null
-do {
-    Start-Sleep -Seconds 30
-    if ($p.HasExited) { if ((Get-Date) - $startTime -lt [TimeSpan]::FromMinutes($Minutes)) { $exitedEarly = $true; break } }
-    $stats = Get-Prime95LogStats -LogFile (Join-Path $workDir 'results.txt')
-    if ($stats.HasErrors) { $errors = $stats.ErrorCount; break }   # 提前停
-    # 辅助：results.txt 长时间未写入仅提示（官方 300s 写入间隔，不判死）
-    if ($stats.LastWriteTime -and ((Get-Date) - $stats.LastWriteTime).TotalMinutes -gt 10) {
-        Write-Host "提示：results.txt 已 10+ 分钟未更新（Prime95 写入间隔约 300s，持续观察）"
-    }
-} while ((Get-Date) - $startTime -lt [TimeSpan]::FromMinutes($Minutes))
+    # 轮询循环（每 30s）：进程 HasExited 为主 + results.txt 错误扫描 + 时长判定
+    $exitedEarly = $false
+    $stats = $null
+    do {
+        Start-Sleep -Seconds 30
+        if ($p.HasExited) { if ((Get-Date) - $startTime -lt [TimeSpan]::FromMinutes($Minutes)) { $exitedEarly = $true; break } }
+        $stats = Get-Prime95LogStats -LogFile (Join-Path $workDir 'results.txt')
+        if ($stats.HasErrors) { break }   # 提前停（错误数见 $stats.ErrorCount）
+        # 辅助：results.txt 长时间未写入仅提示（官方 300s 写入间隔，不判死）
+        if ($stats.LastWriteTime -and ((Get-Date) - $stats.LastWriteTime).TotalMinutes -gt 10) {
+            Write-Host "提示：results.txt 已 10+ 分钟未更新（Prime95 写入间隔约 300s，持续观察）"
+        }
+    } while ((Get-Date) - $startTime -lt [TimeSpan]::FromMinutes($Minutes))
 
-$endTime = Get-Date
-if (-not $exitedEarly -and $stats -and -not $stats.HasErrors) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-$actualMin = [math]::Round((($endTime - $startTime).TotalMinutes), 2)
-$finalStats = if ($exitedEarly) { [PSCustomObject]@{ ErrorCount = 0 } } else { Get-Prime95LogStats -LogFile (Join-Path $workDir 'results.txt') }
-$verdict = Get-Prime95Verdict -ActualMinutes $actualMin -TargetMinutes $Minutes -ErrorCount $finalStats.ErrorCount -ExitedEarly $exitedEarly
-Write-Host ("Prime95 结果: 时长=$actualMin 错误=$($finalStats.ErrorCount) 状态=$($verdict.Status) 结论=$($verdict.Conclusion)")
-Export-Prime95Report -BatchName $BatchName -ToolVersion (Get-AppVersion) -StartTime $startTime -EndTime $endTime `
-    -TargetMinutes $Minutes -ActualMinutes $actualMin -Mode $Mode -ErrorCount $finalStats.ErrorCount `
-    -Verdict $verdict -ReportDir $reportDir -LogPath $LogPath
-Write-CmdLog -Script 'Run-Prime95Stress' -State End -Result ("Prime95 " + $verdict.Status) -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
-exit 0
+    $endTime = Get-Date
+    if (-not $exitedEarly -and $stats -and -not $stats.HasErrors) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    $actualMin = [math]::Round((($endTime - $startTime).TotalMinutes), 2)
+    $finalStats = if ($exitedEarly) { [PSCustomObject]@{ ErrorCount = 0 } } else { Get-Prime95LogStats -LogFile (Join-Path $workDir 'results.txt') }
+    $verdict = Get-Prime95Verdict -ActualMinutes $actualMin -TargetMinutes $Minutes -ErrorCount $finalStats.ErrorCount -ExitedEarly $exitedEarly
+    Write-Host ("Prime95 结果: 时长=$actualMin 错误=$($finalStats.ErrorCount) 状态=$($verdict.Status) 结论=$($verdict.Conclusion)")
+    Export-Prime95Report -BatchName $BatchName -ToolVersion (Get-AppVersion) -StartTime $startTime -EndTime $endTime `
+        -TargetMinutes $Minutes -ActualMinutes $actualMin -Mode $Mode -ErrorCount $finalStats.ErrorCount `
+        -Verdict $verdict -ReportDir $reportDir -LogPath $LogPath
+    Write-CmdLog -Script 'Run-Prime95Stress' -State End -Result ("Prime95 " + $verdict.Status) -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+    exit 0
+} catch {
+    Write-Host "错误: Prime95 压测运行期异常: $($_.Exception.Message)"
+    if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    Write-CmdLog -Script 'Run-Prime95Stress' -State End -Result ("FAIL: " + $_.Exception.Message) -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+    exit 1
+}
