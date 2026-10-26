@@ -42,4 +42,17 @@ $cfg = @{ BOOT_METHOD='SOL'; BMC_HOST='h'; BMC_USER='u'; IPMI_TOOL='i'; MAX_PASS
 Assert ((Merge-SuiteConfig -Cfg $cfg -Bound @{}).Count -eq 13) "8 映射 13 键"
 Assert ((Merge-SuiteConfig -Cfg $cfg -Bound @{}).RestartLoop -eq 5) "8b RESTART_LOOP int"
 
+# 9 新增 5 键映射 + int 解析 + Bound 优先
+$cfg9 = @{ MAX_MINUTES='4320'; TEMP_LIMIT_C='85'; TEMP_INTERVAL_MIN='60'; ORT_BUFFER_MIN='10'; ORT_MAX_GAP_MIN='30' }
+$r9 = Merge-SuiteConfig -Cfg $cfg9 -Bound @{}
+Assert ($r9.MaxMinutes -eq 4320 -and $r9.TempLimitC -eq 85 -and $r9.TempIntervalMin -eq 60 -and $r9.OrtBufferMin -eq 10 -and $r9.OrtMaxGapMin -eq 30) "9 新增5键映射"
+Assert (-not (Merge-SuiteConfig -Cfg @{MAX_MINUTES='abc'} -Bound @{}).ContainsKey('MaxMinutes')) "9b 非法int忽略"
+Assert (-not (Merge-SuiteConfig -Cfg @{MAX_MINUTES='4320'} -Bound @{MaxMinutes=1}).ContainsKey('MaxMinutes')) "9c Bound优先"
+# 10 完整映射 18 键
+$cfg10 = @{ BOOT_METHOD='SOL'; BMC_HOST='h'; BMC_USER='u'; IPMI_TOOL='i'; MAX_PASSES='4'; TEST_LIST='0,1';
+            SERIAL_PARAM='ttyS0,115200'; MONITOR_ECC='1'; MONITOR_TEMP='1'; RESTART_LOOP='5'; CONFIRM_SWITCH='1';
+            EXPECTED_CSV='e'; LOG_PATH='l'; MAX_MINUTES='4320'; TEMP_LIMIT_C='85'; TEMP_INTERVAL_MIN='60';
+            ORT_BUFFER_MIN='10'; ORT_MAX_GAP_MIN='30' }
+Assert ((Merge-SuiteConfig -Cfg $cfg10 -Bound @{}).Count -eq 18) "10 映射 18 键"
+
 Write-Host "ALL PASS"

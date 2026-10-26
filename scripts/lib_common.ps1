@@ -373,6 +373,11 @@ function Merge-SuiteConfig {
         'CONFIRM_SWITCH' = 'ConfirmSwitch'
         'EXPECTED_CSV'   = 'ExpectedCsv'
         'LOG_PATH'       = 'LogPath'
+        'MAX_MINUTES'    = 'MaxMinutes'
+        'TEMP_LIMIT_C'   = 'TempLimitC'
+        'TEMP_INTERVAL_MIN' = 'TempIntervalMin'
+        'ORT_BUFFER_MIN' = 'OrtBufferMin'
+        'ORT_MAX_GAP_MIN' = 'OrtMaxGapMin'
     }
     foreach ($k in $map.Keys) {
         $param = $map[$k]
@@ -383,7 +388,7 @@ function Merge-SuiteConfig {
             { $_ -in 'MonitorEcc', 'MonitorTemp', 'ConfirmSwitch' } {
                 $r[$param] = ($val -match '^(1|true|yes)$')
             }
-            { $_ -in 'MaxPasses', 'RestartLoop' } {
+            { $_ -in 'MaxPasses', 'RestartLoop', 'MaxMinutes', 'TempLimitC', 'TempIntervalMin', 'OrtBufferMin', 'OrtMaxGapMin' } {
                 $n = 0
                 if ([int]::TryParse($val, [ref]$n)) { $r[$param] = $n }
             }
