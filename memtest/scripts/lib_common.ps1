@@ -23,6 +23,11 @@
 #   Read-BmcPass            BMC 密码读取（已给直接用；空则管道/交互输入）
 #   Invoke-IpmiProbe        调用 ipmitool 探针（stdout/stderr 分离 + 退出码）
 #   Test-BmcRole            三态角色判定（Orchestrator/Server/AuthError，mc info 三套件探测）
+#   Get-OrTVerdict           ORT 结论判定（口径 B 纯函数：时长/错误/中断/温度）
+#   Get-OrTLogMetrics        ORT 日志指标（start 计数 / 最大事件间隔 / 跨度，分钟）
+#   Start-OrTTempSampling    温度采样后台 Job（每 IntervalMin 分钟采样写长表 CSV）
+#   Stop-OrTTempSampling     停采样 Job 并统计最高温 / 采样行数
+#   Export-OrTReport         ORT 报告（<批次>-ort-report.csv + master_manifest 合成行）
 # ============================================================================
 
 # ----------------------------------------------------------------------------
@@ -368,6 +373,11 @@ function Merge-SuiteConfig {
         'CONFIRM_SWITCH' = 'ConfirmSwitch'
         'EXPECTED_CSV'   = 'ExpectedCsv'
         'LOG_PATH'       = 'LogPath'
+        'MAX_MINUTES'    = 'MaxMinutes'
+        'TEMP_LIMIT_C'   = 'TempLimitC'
+        'TEMP_INTERVAL_MIN' = 'TempIntervalMin'
+        'ORT_BUFFER_MIN' = 'OrtBufferMin'
+        'ORT_MAX_GAP_MIN' = 'OrtMaxGapMin'
     }
     foreach ($k in $map.Keys) {
         $param = $map[$k]
@@ -378,7 +388,7 @@ function Merge-SuiteConfig {
             { $_ -in 'MonitorEcc', 'MonitorTemp', 'ConfirmSwitch' } {
                 $r[$param] = ($val -match '^(1|true|yes)$')
             }
-            { $_ -in 'MaxPasses', 'RestartLoop' } {
+            { $_ -in 'MaxPasses', 'RestartLoop', 'MaxMinutes', 'TempLimitC', 'TempIntervalMin', 'OrtBufferMin', 'OrtMaxGapMin' } {
                 $n = 0
                 if ([int]::TryParse($val, [ref]$n)) { $r[$param] = $n }
             }
@@ -669,6 +679,256 @@ function ConvertTo-GrubCfg {
         [void]$sb.AppendLine("}")
     }
     return $sb.ToString()
+}
+
+# ----------------------------------------------------------------------------
+# 72h ORT 老化模式：判定 / 日志指标 / 温度采样 Job / ORT 报告
+# ----------------------------------------------------------------------------
+
+# ORT 结论判定（口径 B 纯函数）：PASS = 足时长且无错误且无中断且温度达标
+# （TempLimitC≤0 时跳过温度判据）。判定顺序：时长不足 → Errors/ECC →
+# 中断（StartEventCount>1 / MaxEventGapMin>30min / Stalled）→ 温度。
+function Get-OrTVerdict {
+    param(
+        [double]$ActualMinutes,
+        [int]$TargetMinutes,
+        [int64]$Errors,
+        [int64]$EccErrors,
+        [int]$StartEventCount,
+        [double]$MaxEventGapMin,
+        [bool]$Stalled,
+        [double]$MaxTempC,
+        [int]$TempSamples,
+        [double]$TempLimitC,
+        [int]$GapLimitMin = 30
+    )
+
+    $status = 'PASS'
+    $reason = ''
+    if ($ActualMinutes -lt $TargetMinutes) {
+        $status = 'FAIL'
+        $reason = "时长不足(实际 ${ActualMinutes} min / 目标 ${TargetMinutes} min)"
+    }
+    elseif ($Errors -gt 0) {
+        $status = 'FAIL'
+        $reason = "存在内存错误(Errors=$Errors)"
+    }
+    elseif ($EccErrors -gt 0) {
+        $status = 'FAIL'
+        $reason = "存在ECC错误(EccErrors=$EccErrors)"
+    }
+    elseif ($StartEventCount -gt 1 -or $MaxEventGapMin -gt $GapLimitMin -or $Stalled) {
+        $status = 'FAIL'
+        $reason = "测试中断(StartEventCount=$StartEventCount, MaxEventGapMin=${MaxEventGapMin} min, Stalled=$Stalled)"
+    }
+    elseif ($TempLimitC -gt 0) {
+        if ($TempSamples -eq 0) {
+            $status = 'FAIL'
+            $reason = '温度数据缺失(TempSamples=0)'
+        }
+        elseif ($MaxTempC -gt $TempLimitC) {
+            $status = 'FAIL'
+            $reason = "温度超限(超温: MaxTempC=${MaxTempC} 超过上限 ${TempLimitC})"
+        }
+    }
+    $conclusion = if ($status -eq 'PASS') { "72h 老化通过" } else { $reason }
+    return [PSCustomObject]@{ Status = $status; Conclusion = $conclusion }
+}
+
+# 从解析器 Events 数组提取 ORT 日志指标：start 事件计数、相邻事件最大间隔（分钟）、
+# 日志跨度（分钟）。ts 为 MTLOG 秒值（string），差值/60 转分钟；仅 1 条事件时跨度=0。
+function Get-OrTLogMetrics {
+    param([object]$Summary)
+
+    $events = @($Summary.Events)
+    $startCount = @($events | Where-Object { $_.ev -eq 'start' }).Count
+    $maxGapMin = 0.0
+    $spanMin = 0.0
+    $tsList = @()
+    foreach ($ev in $events) {
+        $ts = 0.0
+        if ($null -ne $ev.ts -and [double]::TryParse([string]$ev.ts, [ref]$ts)) {
+            $tsList += $ts
+        }
+    }
+    if ($tsList.Count -gt 1) {
+        $tsList = @($tsList | Sort-Object)
+        $spanMin = ($tsList[$tsList.Count - 1] - $tsList[0]) / 60.0
+        for ($i = 1; $i -lt $tsList.Count; $i++) {
+            $gap = ($tsList[$i] - $tsList[$i - 1]) / 60.0
+            if ($gap -gt $maxGapMin) { $maxGapMin = $gap }
+        }
+    }
+    return [PSCustomObject]@{ StartEventCount = $startCount; MaxEventGapMin = $maxGapMin; LogSpanMinutes = $spanMin }
+}
+
+# FR-11 温度监控（可选）：SOL 方式下通过 IPMI 读取温度传感器（含 DIMM 温度）
+function Get-IPMITempSensors {
+    param([string]$BmcHost, [string]$BmcUser, [string]$BmcPass, [string]$IpmiTool)
+
+    $a = @("-I", "lanplus", "-H", $BmcHost)
+    if ($BmcUser) { $a += @("-U", $BmcUser) }
+    if ($BmcPass) { $a += @("-P", $BmcPass) }
+    $out = & $IpmiTool @($a + @("sdr", "elist")) 2>$null
+    $temps = @()
+    foreach ($line in $out) {
+        if ($line -match '^\s*([^|]+?)\s*\|\s*([\d.]+)\s+degrees C') {
+            $temps += [PSCustomObject]@{ Sensor = $matches[1].Trim(); TempC = [double]$matches[2] }
+        }
+    }
+    return $temps
+}
+
+# 温度采样后台 Job：dot-source LibPath 后每 IntervalMin 分钟调一次 Get-IPMITempSensors，
+# 长表 Timestamp,Sensor,TempC 追加写 CsvFile。MaxIterations=0 无限循环（生产），>0 为测试钩子。
+function Start-OrTTempSampling {
+    param(
+        [string]$BmcHost,
+        [string]$BmcUser,
+        [string]$BmcPass,
+        [string]$IpmiTool,
+        [int]$IntervalMin = 60,
+        [string]$CsvFile,
+        [string]$LibPath,
+        [int]$MaxIterations = 0
+    )
+
+    $scriptBlock = {
+        param($BmcHost, $BmcUser, $BmcPass, $IpmiTool, $IntervalMin, $CsvFile, $LibPath, $MaxIterations)
+
+        if ($LibPath -and (Test-Path -LiteralPath $LibPath)) { . $LibPath }
+        if (-not (Get-Command Get-IPMITempSensors -ErrorAction SilentlyContinue)) {
+            throw "未找到 Get-IPMITempSensors，请用 -LibPath 指定含该函数的脚本"
+        }
+        if (-not (Test-Path -LiteralPath $CsvFile)) {
+            "Timestamp,Sensor,TempC" | Set-Content -LiteralPath $CsvFile -Encoding UTF8
+        }
+        $i = 0
+        while ($MaxIterations -eq 0 -or $i -lt $MaxIterations) {
+            try {
+                $samples = @(Get-IPMITempSensors -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass -IpmiTool $IpmiTool)
+                foreach ($s in $samples) {
+                    "{0},{1},{2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $s.Sensor, $s.TempC |
+                        Add-Content -LiteralPath $CsvFile -Encoding UTF8
+                }
+            } catch {
+                Write-Warning "温度采样失败: $($_.Exception.Message)"
+            }
+            $i++
+            if ($MaxIterations -gt 0 -and $i -ge $MaxIterations) { break }
+            if ($IntervalMin -gt 0) { Start-Sleep -Seconds ($IntervalMin * 60) }
+        }
+    }
+
+    return Start-Job -ScriptBlock $scriptBlock -ArgumentList $BmcHost, $BmcUser, $BmcPass, $IpmiTool, $IntervalMin, $CsvFile, $LibPath, $MaxIterations
+}
+
+# 停止温度采样 Job（停 Job → 收尾 → 读 CsvFile 统计最高温与采样行数）。
+# 无采样数据时 MaxTempC=0、TempSamples=0（供判据"温度数据缺失"使用）。
+function Stop-OrTTempSampling {
+    param(
+        [System.Management.Automation.Job]$Job,
+        [string]$CsvFile,
+        [int]$WaitSec = 30
+    )
+
+    if ($Job) {
+        if ($Job.State -eq 'Running') { Stop-Job -Job $Job }
+        $deadline = (Get-Date).AddSeconds($WaitSec)
+        while ($Job.State -eq 'Running' -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 200
+        }
+        Receive-Job -Job $Job -ErrorAction SilentlyContinue | Out-Null
+        Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue
+    }
+
+    $tempC = @()
+    if ($CsvFile -and (Test-Path -LiteralPath $CsvFile)) {
+        $tempC = @(Import-Csv -LiteralPath $CsvFile | ForEach-Object { [double]$_.TempC })
+    }
+    $maxTemp = 0.0
+    if ($tempC.Count -gt 0) { $maxTemp = ($tempC | Measure-Object -Maximum).Maximum }
+    return [PSCustomObject]@{ MaxTempC = $maxTemp; TempSamples = $tempC.Count }
+}
+
+# ORT 报告：写 <Batch>-ort-report.csv（16 列）+ master_manifest 追加一行（Slot=ALL，
+# 复用现有 14 列投影合并，写法同 Export-TestReport）。ToolVersion 由调用方传入（函数内不读 VERSION）。
+function Export-OrTReport {
+    param(
+        [string]$BatchName,
+        [string]$ToolVersion,
+        [object]$CaptureStart,
+        [object]$CaptureEnd,
+        [int]$TargetMinutes,
+        [double]$ActualMinutes,
+        [object]$Summary,
+        [object]$Metrics,
+        [object]$Verdict,
+        [double]$MaxTempC,
+        [int]$TempSamples,
+        [bool]$Stalled = $false,
+        [int]$GapLimitMin = 30,
+        [string]$ReportDir,
+        [string]$LogPath
+    )
+
+    $startTime = if ($CaptureStart -is [datetime]) { $CaptureStart.ToString("yyyy-MM-dd HH:mm:ss") } else { [string]$CaptureStart }
+    $endTime   = if ($CaptureEnd -is [datetime])   { $CaptureEnd.ToString("yyyy-MM-dd HH:mm:ss") }   else { [string]$CaptureEnd }
+    $totalPasses = if ($Summary) { $Summary.PassesCompleted } else { 0 }
+    $interrupted = ($Metrics.StartEventCount -gt 1) -or ($Metrics.MaxEventGapMin -gt $GapLimitMin) -or $Stalled
+
+    $row = [PSCustomObject]@{
+        Batch           = $BatchName
+        ToolVersion     = $ToolVersion
+        Mode            = 'ORT'
+        StartTime       = $startTime
+        EndTime         = $endTime
+        TargetMinutes   = $TargetMinutes
+        ActualMinutes   = $ActualMinutes
+        TotalPasses     = $totalPasses
+        Errors          = if ($Summary) { $Summary.Errors } else { 0 }
+        EccErrors       = if ($Summary) { $Summary.EccErrors } else { 0 }
+        MaxTempC        = $MaxTempC
+        TempSamples     = $TempSamples
+        MaxEventGapMin  = if ($Metrics) { $Metrics.MaxEventGapMin } else { 0 }
+        Interrupted     = $interrupted
+        Status          = if ($Verdict) { $Verdict.Status } else { 'FAIL' }
+        Conclusion      = if ($Verdict) { $Verdict.Conclusion } else { '' }
+    }
+
+    if (-not (Test-Path -LiteralPath $ReportDir)) { New-Item -ItemType Directory -Path $ReportDir -Force | Out-Null }
+    $file = Join-Path $ReportDir "$BatchName-ort-report.csv"
+    $row | Export-Csv -LiteralPath $file -NoTypeInformation -Encoding UTF8
+    Write-Host "ORT 报告已生成: $file"
+
+    # master_manifest 合成行（Slot=ALL；14 列清单与 Export-TestReport 一致，合并投影复用）
+    $reportColumns = @(
+        'Batch', 'ToolVersion', 'Slot', 'SerialNumber', 'PartNumber', 'CapacityGB',
+        'SpeedMTs', 'MemType', 'MatchState', 'TestDate', 'Passes', 'Errors',
+        'EccErrors', 'Result'
+    )
+    $masterRow = [PSCustomObject]@{
+        Batch        = $BatchName
+        ToolVersion  = $ToolVersion
+        Slot         = 'ALL'
+        SerialNumber = ''
+        PartNumber   = ''
+        CapacityGB   = 0
+        SpeedMTs     = 0
+        MemType      = ''
+        MatchState   = ''
+        TestDate     = $endTime
+        Passes       = $totalPasses
+        Errors       = if ($Summary) { $Summary.Errors } else { 0 }
+        EccErrors    = if ($Summary) { $Summary.EccErrors } else { 0 }
+        Result       = if ($Verdict -and $Verdict.Status -eq 'PASS') { 'ORT PASS' } else { 'ORT FAIL' }
+    }
+    $master = Join-Path $LogPath 'master_manifest.csv'
+    $all = New-Object System.Collections.Generic.List[object]
+    if (Test-Path $master) { $all.AddRange([object[]](Import-Csv -Path $master)) }
+    $all.AddRange([object[]]@($masterRow))
+    $all | Select-Object $reportColumns | Export-Csv -Path $master -NoTypeInformation -Encoding UTF8
+    Write-Host "累计总表已更新: $master（共 $($all.Count) 条）"
 }
 
 # 指令记录（cmdlog）：把本项目每次脚本调用记入 <包根>\results\cmdlog\commands-YYYY-MM-DD.csv。

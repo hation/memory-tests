@@ -61,6 +61,13 @@ param(
     # 重启循环（批次切换）
     [int]$RestartLoop = 0,
 
+    # ORT 老化模式（时长制）：-MaxMinutes>0 时启用，按时长而非轮数终止
+    [int]$MaxMinutes = 0,        # 老化目标时长（分钟，0=关闭 ORT；72h 老化=4320）
+    [int]$TempLimitC = 85,       # 老化温度上限（摄氏度，超过判异常）
+    [int]$TempIntervalMin = 60,  # 温度/状态采样间隔（分钟）
+    [int]$OrtBufferMin = 10,     # ORT 前缓冲（分钟，先跑完整一轮再开始计时）
+    [int]$OrtMaxGapMin = 30,     # 最长无进度间隔（分钟，超时判定捕获停滞/日志中断）
+
     # 输出
     [string]$LogPath = "",
     [switch]$ParseOnly,
@@ -105,6 +112,12 @@ Memtest86+ 自动化编排与压测报告汇总工具
   -MonitorEcc     同时监控 WHEA/ECC 事件
   -MonitorTemp    读取 IPMI 温度传感器（仅 SOL 方式）
   -RestartLoop    断电-上电循环次数（仅 SOL 方式，建议从控制机运行）
+  ORT 老化模式（-MaxMinutes>0 启用，时长制终止；仅支持 SOL/Serial，与 -RestartLoop 互斥）：
+  -MaxMinutes     老化目标时长（分钟，0=关闭；72h 老化=4320）
+  -TempLimitC     老化温度上限（摄氏度，默认 85）
+  -TempIntervalMin 温度/状态采样间隔（分钟，默认 60）
+  -OrtBufferMin   ORT 前缓冲（分钟，默认 10，先跑完整一轮再计时）
+  -OrtMaxGapMin   最长无进度间隔（分钟，默认 30，超时判定捕获停滞/日志中断）
   输出：
   -LogPath        输出目录（默认 <包根>\results\）
   -ParseOnly     仅解析模式：配合 -LogFile 解析已有日志/报告
@@ -115,6 +128,8 @@ Memtest86+ 自动化编排与压测报告汇总工具
   .\scripts\Run-MemtestSuite.ps1 -BootMethod USB -UsbDrive E: -MaxPasses 4
   .\scripts\Run-MemtestSuite.ps1 -BootMethod EFI -EfiImage D:\mt86plus.efi -MaxPasses 4 -ConfirmSwitch
   .\scripts\Run-MemtestSuite.ps1 -ParseOnly -LogFile .\results\raw\mtlog.txt
+  ORT 72h 老化（时长制，配温度采样；SOL/Serial）：
+  .\scripts\Run-MemtestSuite.ps1 -BatchName srv01-a1-ort -BootMethod SOL -BmcHost 10.0.0.10 -BmcUser root -MaxMinutes 4320 -ConfirmSwitch
 "@
     exit 0
 }
@@ -123,6 +138,21 @@ Memtest86+ 自动化编排与压测报告汇总工具
 $suiteCfg = Get-Config -Path (Join-Path $PSScriptRoot '..\config\memtest-suite.conf')
 $suiteDef = Merge-SuiteConfig -Cfg $suiteCfg -Bound $PSBoundParameters
 foreach ($k in $suiteDef.Keys) { Set-Variable -Name $k -Value $suiteDef[$k] }
+
+# ORT 模式校验（必须在 BMC 密码交互之前，避免无效组合卡在密码输入）
+if ($MaxMinutes -gt 0) {
+    if ($RestartLoop -gt 0) {
+        Write-Error "ORT 模式与 -RestartLoop 互斥，请分开执行。"
+        exit 1
+    }
+    if ($BootMethod -notin @('SOL', 'Serial')) {
+        Write-Error "ORT 模式仅支持 SOL/Serial 引导方式（USB/EFI 不支持时长终止），当前 $BootMethod。"
+        exit 1
+    }
+    if ($PSBoundParameters.ContainsKey('MaxPasses')) {
+        Write-Warning "同时指定 -MaxPasses 与 -MaxMinutes，按 ORT 时长模式执行（MaxPasses 忽略）。"
+    }
+}
 
 # 指令记录：本次调用入库（Help 已处理；BMC 密码等敏感参数由 Write-CmdLog 打码）
 $scriptStartTime = Get-Date
@@ -162,7 +192,8 @@ if ($IpmiTool -eq "ipmitool") {
 function Invoke-SolCapture {
     param(
         [string]$BmcHost, [string]$BmcUser, [string]$BmcPass,
-        [string]$IpmiTool, [string]$OutFile, [int]$TimeoutMinutes
+        [string]$IpmiTool, [string]$OutFile, [int]$TimeoutMinutes,
+        [int]$MaxStallMin = 0
     )
 
     if (-not $ConfirmSwitch) {
@@ -174,38 +205,54 @@ function Invoke-SolCapture {
     if ($BmcUser) { $args += @("-U", $BmcUser) }
     if ($BmcPass) { $args += @("-P", $BmcPass) }
 
+    $capStart = Get-Date
     Write-Host "启动 ipmitool SOL 会话，输出到 $OutFile ..."
     $p = Start-Process -FilePath $IpmiTool -ArgumentList ($args + @("sol", "activate")) `
             -RedirectStandardOutput $OutFile -RedirectStandardError "$OutFile.err" -PassThru -WindowStyle Hidden
 
-    # 等待 ev=done 出现（或超时）
+    # 等待 ev=done 出现（或超时/停滞）
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     $done = $false
+    $stalled = $false
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 10
         if (Test-Path $OutFile) {
             if (Select-String -Path $OutFile -Pattern 'ev=done' -Quiet) { $done = $true; break }
         }
+        # 停滞检测：SOL 输出超过 MaxStallMin 分钟无写入 → 疑似会话中断
+        if ($MaxStallMin -gt 0) {
+            $lastWrite = (Get-Item $OutFile -ErrorAction SilentlyContinue).LastWriteTime
+            if ($lastWrite) {
+                $stallMin = ((Get-Date) - $lastWrite).TotalMinutes
+                if ($stallMin -gt $MaxStallMin) {
+                    $stalled = $true
+                    Write-Warning "SOL 输出停滞 $([math]::Round($stallMin, 1)) 分钟，疑似会话中断。"
+                    break
+                }
+            }
+        }
     }
 
     # 结束 SOL 会话
     try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
-    if (-not $done) {
+    if (-not $done -and -not $stalled) {
         Write-Warning "SOL 捕获超时（$TimeoutMinutes 分钟），未收到 ev=done。"
     }
-    return $done
+    return [PSCustomObject]@{ Done = $done; Stalled = $stalled; CaptureStart = $capStart; CaptureEnd = Get-Date }
 }
 
 # Serial 直连串口方式：物理串口线直连服务器 COM 口抓取 MTLOG（完全离线）
 function Invoke-SerialCapture {
     param(
         [string]$SerialPortName, [int]$BaudRate,
-        [string]$OutFile, [int]$TimeoutMinutes
+        [string]$OutFile, [int]$TimeoutMinutes,
+        [int]$MaxStallMin = 0
     )
 
     Write-Host "打开串口 $SerialPortName @ $BaudRate，等待 Memtest86+ 输出 ..."
     Write-Host "提示：需先用 USB/EFI 方式把被测服务器引导进 Memtest86+，且其 log 打到物理串口 ttyS0"
 
+    $capStart = Get-Date
     $port = New-Object System.IO.Ports.SerialPort($SerialPortName, $BaudRate, "None", 8, "One")
     $port.ReadTimeout = 3000
     $port.Open()
@@ -213,16 +260,28 @@ function Invoke-SerialCapture {
     $sw = New-Object System.IO.StreamWriter($OutFile, $true, [System.Text.Encoding]::UTF8)
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     $done = $false
+    $stalled = $false
+    $lastWrite = Get-Date   # 停滞检测基准：最近一次写入时间
     try {
         while ((Get-Date) -lt $deadline) {
             if (-not $port.IsOpen) { break }
             try {
                 $line = $port.ReadLine()
             } catch {
-                continue   # 读超时（ReadTimeout 3000ms），继续等
+                # 读超时（ReadTimeout 3000ms）：检查输出停滞（超过 MaxStallMin 分钟无写入）
+                if ($MaxStallMin -gt 0) {
+                    $stallMin = ((Get-Date) - $lastWrite).TotalMinutes
+                    if ($stallMin -gt $MaxStallMin) {
+                        $stalled = $true
+                        Write-Warning "串口输出停滞 $([math]::Round($stallMin, 1)) 分钟，疑似会话中断。"
+                        break
+                    }
+                }
+                continue
             }
             $sw.WriteLine($line)
             $sw.Flush()
+            $lastWrite = Get-Date
             if ($line -match 'ev=done') { $done = $true; break }
         }
     } finally {
@@ -230,10 +289,10 @@ function Invoke-SerialCapture {
         if ($port.IsOpen) { $port.Close() }
         $port.Dispose()
     }
-    if (-not $done) {
+    if (-not $done -and -not $stalled) {
         Write-Warning "串口捕获超时（$TimeoutMinutes 分钟），未收到 ev=done。"
     }
-    return $done
+    return [PSCustomObject]@{ Done = $done; Stalled = $stalled; CaptureStart = $capStart; CaptureEnd = Get-Date }
 }
 
 # USB 方式：提示人工引导 U 盘，测试完成后按 1 次键保存报告，编排器自动读取（半自动）
@@ -343,22 +402,8 @@ function Invoke-PowerCycleLoop {
     Write-Host "断电循环记录 -> $LogCsv"
 }
 
-# FR-11 温度监控（可选）：SOL 方式下通过 IPMI 读取温度传感器（含 DIMM 温度）
-function Get-IPMITempSensors {
-    param([string]$BmcHost, [string]$BmcUser, [string]$BmcPass, [string]$IpmiTool)
-
-    $a = @("-I", "lanplus", "-H", $BmcHost)
-    if ($BmcUser) { $a += @("-U", $BmcUser) }
-    if ($BmcPass) { $a += @("-P", $BmcPass) }
-    $out = & $IpmiTool @($a + @("sdr", "elist")) 2>$null
-    $temps = @()
-    foreach ($line in $out) {
-        if ($line -match '^\s*([^|]+?)\s*\|\s*([\d.]+)\s+degrees C') {
-            $temps += [PSCustomObject]@{ Sensor = $matches[1].Trim(); TempC = [double]$matches[2] }
-        }
-    }
-    return $temps
-}
+# FR-11 温度监控（可选）：SOL 方式下通过 IPMI 读取温度传感器（含 DIMM 温度），
+# Get-IPMITempSensors 已迁入 lib_common.ps1（生产采样 Job 与主流程均经 dot-source 使用）
 
 # ----------------------------------------------------------------------------
 # FR-6 报告汇总（合并 master_manifest.csv）
@@ -439,6 +484,50 @@ if ($ParseOnly) {
 Write-Host "===== Memtest86+ 编排开始（批次: $BatchName，方式: $BootMethod）====="
 Write-Event -Type stage -Data @{stage='orchestrator'; status='start'; batch=$BatchName; method=$BootMethod}
 
+$ortMode = ($MaxMinutes -gt 0)
+if ($ortMode) {
+    Write-Host "===== ORT 模式：目标 $MaxMinutes 分钟，温度上限 $TempLimitC°C，采样间隔 $TempIntervalMin 分钟 ====="
+    $captureStart = Get-Date
+    $tempCsv = Join-Path $reportDir "$BatchName-temp.csv"
+    $tempJob = Start-OrTTempSampling -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass -IpmiTool $IpmiTool `
+        -IntervalMin $TempIntervalMin -CsvFile $tempCsv -LibPath (Join-Path $PSScriptRoot 'lib_common.ps1')
+    try {
+        $rawLog = Join-Path $rawDir "$BatchName.mtlog.txt"
+        if ($BootMethod -eq 'SOL') {
+            $cap = Invoke-SolCapture -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass -IpmiTool $IpmiTool `
+                -OutFile $rawLog -TimeoutMinutes ($MaxMinutes + $OrtBufferMin) -MaxStallMin $OrtMaxGapMin
+        } else {
+            $cap = Invoke-SerialCapture -SerialPortName $SerialPort -BaudRate $BaudRate `
+                -OutFile $rawLog -TimeoutMinutes ($MaxMinutes + $OrtBufferMin) -MaxStallMin $OrtMaxGapMin
+        }
+        $tempInfo = Stop-OrTTempSampling -Job $tempJob -CsvFile $tempCsv
+    } catch {
+        Stop-OrTTempSampling -Job $tempJob -CsvFile $tempCsv | Out-Null
+        throw
+    }
+    $captureEnd = Get-Date
+    $summary = if (Test-Path $rawLog) { Invoke-MtlogParser -LogFile $rawLog } else { $null }
+    if ($null -eq $summary) {
+        Write-Error "ORT：未获取到 Memtest86+ 日志。"
+        Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result 'FAIL: ORT 未获取到日志' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+        exit 1
+    }
+    $metrics = Get-OrTLogMetrics -Summary $summary
+    $captureMin = [math]::Round((($captureEnd - $captureStart).TotalMinutes), 2)
+    $actualMin = [math]::Min($captureMin, $metrics.LogSpanMinutes)
+    $verdict = Get-OrTVerdict -ActualMinutes $actualMin -TargetMinutes $MaxMinutes -Errors $summary.Errors `
+        -EccErrors $summary.EccErrors -StartEventCount $metrics.StartEventCount -MaxEventGapMin $metrics.MaxEventGapMin `
+        -Stalled $cap.Stalled -MaxTempC $tempInfo.MaxTempC -TempSamples $tempInfo.TempSamples -TempLimitC $TempLimitC `
+        -GapLimitMin $OrtMaxGapMin
+    Write-Host ("ORT 结果: 时长=$actualMin 轮次=$($summary.PassesCompleted) 错误=$($summary.Errors) ECC=$($summary.EccErrors) 状态=$($verdict.Status) 结论=$($verdict.Conclusion)")
+    Export-OrTReport -BatchName $BatchName -ToolVersion (Get-AppVersion) -CaptureStart $captureStart -CaptureEnd $captureEnd `
+        -TargetMinutes $MaxMinutes -ActualMinutes $actualMin -Summary $summary -Metrics $metrics -Verdict $verdict `
+        -MaxTempC $tempInfo.MaxTempC -TempSamples $tempInfo.TempSamples -Stalled $cap.Stalled -GapLimitMin $OrtMaxGapMin `
+        -ReportDir $reportDir -LogPath $LogPath
+    Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result ("ORT " + $verdict.Status) -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+    exit 0   # ORT 分支到此结束（不进入常规 per-slot 报告与 RestartLoop）
+}
+
 # FR-1 识别建档
 $inventory = Get-MemoryInventory -ExpectedCsv $ExpectedCsv -BatchName $BatchName
 if ($inventory.Count -eq 0) {
@@ -458,12 +547,14 @@ $usbReport = Join-Path $rawDir "$BatchName.usb.txt"
 
 switch ($BootMethod) {
     "SOL" {
-        Invoke-SolCapture -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass `
+        $cap = Invoke-SolCapture -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass `
             -IpmiTool $IpmiTool -OutFile $rawLog -TimeoutMinutes ($MaxPasses * 90 + 30)
+        if (-not $cap.Done) { Write-Warning "SOL 捕获未收到 ev=done（Done=$($cap.Done) Stalled=$($cap.Stalled)）。" }
     }
     "Serial" {
-        Invoke-SerialCapture -SerialPortName $SerialPort -BaudRate $BaudRate `
+        $cap = Invoke-SerialCapture -SerialPortName $SerialPort -BaudRate $BaudRate `
             -OutFile $rawLog -TimeoutMinutes ($MaxPasses * 90 + 30)
+        if (-not $cap.Done) { Write-Warning "串口捕获未收到 ev=done（Done=$($cap.Done) Stalled=$($cap.Stalled)）。" }
     }
     "USB" {
         $src = Invoke-UsbCapture -UsbDrive $UsbDrive -ReportDir $rawDir -ReportPrefix $UsbReportPrefix
