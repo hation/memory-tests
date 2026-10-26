@@ -206,8 +206,8 @@ function Invoke-MtlogParser {
             "addr" { $summary.ErrorDetails += [PSCustomObject]@{ Type = $event; Fields = $fields } }
             "data" { $summary.ErrorDetails += [PSCustomObject]@{ Type = $event; Fields = $fields } }
             "parity" { $summary.ErrorDetails += [PSCustomObject]@{ Type = $event; Fields = $fields } }
-            "uecc" { $summary.ErrorDetails += [PSCustomObject]@{ Type = $event; Fields = $fields } }
-            "ecc" { $summary.ErrorDetails += [PSCustomObject]@{ Type = $event; Fields = $fields } }
+            "uecc" { $summary.ErrorDetails += [PSCustomObject]@{ Type = $event; Fields = $fields }; $summary.EccErrors++ }
+            "ecc"  { $summary.ErrorDetails += [PSCustomObject]@{ Type = $event; Fields = $fields }; $summary.EccErrors++ }
             default {
                 $summary.Events += [PSCustomObject]@{ ts = $fields.ts; ev = $event; desc = ($fields | Out-String).Trim() }
             }
