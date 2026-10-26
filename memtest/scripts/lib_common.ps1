@@ -28,6 +28,9 @@
 #   Start-OrTTempSampling    温度采样后台 Job（每 IntervalMin 分钟采样写长表 CSV）
 #   Stop-OrTTempSampling     停采样 Job 并统计最高温 / 采样行数
 #   Export-OrTReport         ORT 报告（<批次>-ort-report.csv + master_manifest 合成行）
+#   Get-Prime95Verdict       Prime95 结论判定（时长不足/错误/提前退出 纯函数）
+#   Get-Prime95LogStats      Prime95 日志错误统计（FATAL ERROR/Self-test failed/FAILED）
+#   Export-Prime95Report     Prime95 报告（<批次>-prime95-report.csv + master 合成行）
 # ============================================================================
 
 # ----------------------------------------------------------------------------
@@ -932,6 +935,130 @@ function Export-OrTReport {
         Errors       = if ($Summary) { $Summary.Errors } else { 0 }
         EccErrors    = if ($Summary) { $Summary.EccErrors } else { 0 }
         Result       = if ($Verdict -and $Verdict.Status -eq 'PASS') { 'ORT PASS' } else { 'ORT FAIL' }
+    }
+    $master = Join-Path $LogPath 'master_manifest.csv'
+    $all = New-Object System.Collections.Generic.List[object]
+    if (Test-Path $master) { $all.AddRange([object[]](Import-Csv -Path $master)) }
+    $all.AddRange([object[]]@($masterRow))
+    $all | Select-Object $reportColumns | Export-Csv -Path $master -NoTypeInformation -Encoding UTF8
+    Write-Host "累计总表已更新: $master（共 $($all.Count) 条）"
+}
+
+# ----------------------------------------------------------------------------
+# Prime95 混插长压：判定 / 日志统计 / 报告
+# ----------------------------------------------------------------------------
+
+# Prime95 结论判定（纯函数）：PASS = 足时长且无错误且未提前退出。
+# 判定顺序：提前退出（根因，优先）→ 时长不足 → 错误。PASS 文案含实际/目标时长；
+# FAIL 附原因（含关键词"时长不足/错误/提前退出"，供测试断言与结论文案使用）。
+function Get-Prime95Verdict {
+    param(
+        [double]$ActualMinutes,
+        [int]$TargetMinutes,
+        [int]$ErrorCount = 0,
+        [bool]$ExitedEarly = $false
+    )
+
+    $status = 'PASS'
+    $reason = ''
+    if ($ExitedEarly) {
+        $status = 'FAIL'
+        $reason = 'Prime95 提前退出(ExitedEarly=true)'
+    }
+    elseif ($ActualMinutes -lt $TargetMinutes) {
+        $status = 'FAIL'
+        $reason = "时长不足(实际 ${ActualMinutes} 分钟 / 目标 ${TargetMinutes} 分钟)"
+    }
+    elseif ($ErrorCount -gt 0) {
+        $status = 'FAIL'
+        $reason = "检测到错误(ErrorCount=${ErrorCount})"
+    }
+    if ($status -eq 'PASS') {
+        $conclusion = "Prime95 长压通过：{0} 分钟 ≥ 目标 {1} 分钟，0 错误" -f $ActualMinutes, $TargetMinutes
+    } else {
+        $conclusion = $reason
+    }
+    return [PSCustomObject]@{ Status = $status; Conclusion = $conclusion }
+}
+
+# 统计 Prime95 日志错误：逐行匹配错误正则 FATAL ERROR / Self-test failed / FAILED，
+# 返回 ErrorCount 与 HasErrors。文件不存在 → ErrorCount=0/HasErrors=$false；LastWriteTime 缺失→null。
+function Get-Prime95LogStats {
+    param([string]$LogFile)
+
+    if (-not (Test-Path -LiteralPath $LogFile)) {
+        return [PSCustomObject]@{ ErrorCount = 0; HasErrors = $false; LastWriteTime = $null }
+    }
+
+    $errRe = 'FATAL ERROR|Self-test failed|FAILED'
+    $count = 0
+    foreach ($line in Get-Content -LiteralPath $LogFile) {
+        if ($line -match $errRe) { $count++ }
+    }
+    $lastWrite = (Get-Item -LiteralPath $LogFile -ErrorAction SilentlyContinue).LastWriteTime
+    return [PSCustomObject]@{ ErrorCount = $count; HasErrors = ($count -gt 0); LastWriteTime = $lastWrite }
+}
+
+# Prime95 报告：写 <Batch>-prime95-report.csv（16 列）+ master_manifest 追加一行
+# （Slot=ALL、Passes=0、Errors=ErrorCount、EccErrors=0、Result=`Prime95 $($Verdict.Status)`，
+# 复用 ORT 的 14 列投影合并，写法同 Export-OrTReport）。ToolVersion 由调用方传入（函数内不读 VERSION）。
+function Export-Prime95Report {
+    param(
+        [string]$BatchName,
+        [string]$ToolVersion,
+        [object]$StartTime,
+        [object]$EndTime,
+        [int]$TargetMinutes,
+        [double]$ActualMinutes,
+        [string]$Mode,
+        [int]$ErrorCount = 0,
+        [object]$Verdict,
+        [string]$ReportDir,
+        [string]$LogPath
+    )
+
+    $startTime = if ($StartTime -is [datetime]) { $StartTime.ToString("yyyy-MM-dd HH:mm:ss") } else { [string]$StartTime }
+    $endTime   = if ($EndTime -is [datetime])   { $EndTime.ToString("yyyy-MM-dd HH:mm:ss") }   else { [string]$EndTime }
+
+    $row = [PSCustomObject]@{
+        Batch         = $BatchName
+        ToolVersion   = $ToolVersion
+        Mode          = $Mode
+        StartTime     = $startTime
+        EndTime       = $endTime
+        TargetMinutes = $TargetMinutes
+        ActualMinutes = $ActualMinutes
+        ErrorCount    = $ErrorCount
+        Status        = if ($Verdict) { $Verdict.Status } else { 'FAIL' }
+        Conclusion    = if ($Verdict) { $Verdict.Conclusion } else { '' }
+    }
+
+    if (-not (Test-Path -LiteralPath $ReportDir)) { New-Item -ItemType Directory -Path $ReportDir -Force | Out-Null }
+    $file = Join-Path $ReportDir "$BatchName-prime95-report.csv"
+    $row | Export-Csv -LiteralPath $file -NoTypeInformation -Encoding UTF8
+    Write-Host "Prime95 报告已生成: $file"
+
+    # master_manifest 合成行（Slot=ALL；14 列清单与 Export-OrTReport 一致，合并投影复用）
+    $reportColumns = @(
+        'Batch', 'ToolVersion', 'Slot', 'SerialNumber', 'PartNumber', 'CapacityGB',
+        'SpeedMTs', 'MemType', 'MatchState', 'TestDate', 'Passes', 'Errors',
+        'EccErrors', 'Result'
+    )
+    $masterRow = [PSCustomObject]@{
+        Batch        = $BatchName
+        ToolVersion  = $ToolVersion
+        Slot         = 'ALL'
+        SerialNumber = ''
+        PartNumber   = ''
+        CapacityGB   = 0
+        SpeedMTs     = 0
+        MemType      = ''
+        MatchState   = ''
+        TestDate     = $endTime
+        Passes       = 0
+        Errors       = $ErrorCount
+        EccErrors    = 0
+        Result       = "Prime95 $($Verdict.Status)"
     }
     $master = Join-Path $LogPath 'master_manifest.csv'
     $all = New-Object System.Collections.Generic.List[object]
