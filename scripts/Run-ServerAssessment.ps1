@@ -6,6 +6,8 @@
 #   .\scripts\Run-ServerAssessment.ps1 -Local                                      # 本机（服务器已进 Windows）
 #   .\scripts\Run-ServerAssessment.ps1 -BmcHost <IP> -BmcUser <u> -BmcPass <p>    # 编排机远程
 #   .\scripts\Run-ServerAssessment.ps1 -Local -BmcHost <IP> -BmcUser <u> -BmcPass <p> -MachineName srv01
+#   .\scripts\Run-ServerAssessment.ps1 -MergeInband <服务器侧cap.csv> -MergeOob <编排机侧cap.csv> -MachineName srv01   # 合并模式（跳过探测）
+#   ... -VerifyPowerCycle    # 实测断电循环验证（透传探测脚本，正常模式生效）
 # ============================================================================
 
 param(
@@ -17,7 +19,10 @@ param(
     [string]$MachineName = "",   # 报告命名用（缺省：本机名 或 BMC IP）
     [string]$OutDir = "",        # 输出目录（缺省 <包根>\results\assessment）
     [string]$CapScript = "",     # Check-ServerCapabilities.ps1 路径（缺省同目录）
-    [switch]$Help
+    [switch]$Help,
+    [switch]$VerifyPowerCycle,   # 实测断电循环验证（透传给 Check-ServerCapabilities，仅正常模式）
+    [string]$MergeInband = "",   # 合并模式：服务器侧 cap CSV（A=Inband）
+    [string]$MergeOob = ""       # 合并模式：编排机侧 cap CSV（B=Oob）
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,6 +49,8 @@ if ($Help) {
   -MachineName  报告命名（缺省：本机名 或 BMC IP）
   -OutDir       输出目录（缺省 <包根>\results\assessment）
   -CapScript    探测脚本路径（缺省同目录 Check-ServerCapabilities.ps1）
+  -VerifyPowerCycle  实测断电循环验证（透传探测脚本）
+  -MergeInband/-MergeOob  合并模式：服务器侧+编排机侧 cap CSV（跳过探测；优先级高者胜，同级取服务器侧）
 输出：<MachineName>-assessment.csv（Item/Name/Status/建议动作）+ 汇总文本
 "@
     exit 0
@@ -53,9 +60,73 @@ if ($Help) {
 $scriptStartTime = Get-Date
 Write-CmdLog -Script 'Run-ServerAssessment' -CmdArgs $MyInvocation.Line -State Start
 
+# ---- 合并模式：-MergeInband(A=服务器侧) + -MergeOob(B=编排机侧) 同给 → 跳过探测，直接合并两侧 cap CSV ----
+$mergeMode = ($MergeInband -ne '') -or ($MergeOob -ne '')
+# 合并优先级（高者胜；同级取 A=服务器侧）：已验证/可测=3，外包/条件=2，需*=1，其余=0
+function Get-StatusPriority([string]$s) {
+    if ($s -match '^(已验证|可测)') { 3 }
+    elseif ($s -match '^(外包|条件)') { 2 }
+    elseif ($s -match '^需') { 1 }
+    else { 0 }
+}
+$items = $null
+if ($mergeMode) {
+    # 校验 1：两参数必须同时给出（缺一 → 报错并指名缺失参数，非 0 退出）
+    if ($MergeInband -eq '') {
+        Write-CmdLog -Script 'Run-ServerAssessment' -State End -Result 'FAIL: 缺少 -MergeInband' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+        Write-Error "合并模式需同时提供 -MergeInband 与 -MergeOob；缺少 -MergeInband"
+        exit 1
+    }
+    if ($MergeOob -eq '') {
+        Write-CmdLog -Script 'Run-ServerAssessment' -State End -Result 'FAIL: 缺少 -MergeOob' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+        Write-Error "合并模式需同时提供 -MergeInband 与 -MergeOob；缺少 -MergeOob"
+        exit 1
+    }
+    # 校验 2：两文件存在且可读
+    if (-not (Test-Path -LiteralPath $MergeInband)) {
+        Write-CmdLog -Script 'Run-ServerAssessment' -State End -Result 'FAIL: -MergeInband 不存在' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+        Write-Error "-MergeInband 文件不存在或不可读: $MergeInband"
+        exit 1
+    }
+    if (-not (Test-Path -LiteralPath $MergeOob)) {
+        Write-CmdLog -Script 'Run-ServerAssessment' -State End -Result 'FAIL: -MergeOob 不存在' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+        Write-Error "-MergeOob 文件不存在或不可读: $MergeOob"
+        exit 1
+    }
+    $csvA = @(Import-Csv -LiteralPath $MergeInband)
+    $csvB = @(Import-Csv -LiteralPath $MergeOob)
+    # 校验 3：列头须含 Item/Name/Status
+    $reqCols = @('Item', 'Name', 'Status')
+    foreach ($f in @(@{ P = '-MergeInband'; Rows = $csvA; Path = $MergeInband }, @{ P = '-MergeOob'; Rows = $csvB; Path = $MergeOob })) {
+        if ($f.Rows.Count -eq 0 -or ($reqCols | Where-Object { $f.Rows[0].PSObject.Properties.Name -notcontains $_ }).Count -gt 0) {
+            Write-CmdLog -Script 'Run-ServerAssessment' -State End -Result "FAIL: $($f.P) 缺 Item/Name/Status 列" -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+            Write-Error "$($f.P) 文件缺少 Item/Name/Status 列: $($f.Path)"
+            exit 1
+        }
+    }
+    # Role 校验：仅警告不失败（传反提示）；旧版无 Role 列照常合并
+    if ($csvA[0].PSObject.Properties.Name -contains 'Role') {
+        $badA = $csvA | Where-Object { [string]$_.Role -ne '被测服务器' } | Select-Object -First 1
+        if ($badA) { Write-Warning "警告：-MergeInband 文件 Role=$($badA.Role)，确认未传反？" }
+    }
+    if ($csvB[0].PSObject.Properties.Name -contains 'Role') {
+        $badB = $csvB | Where-Object { [string]$_.Role -ne '编排机' } | Select-Object -First 1
+        if ($badB) { Write-Warning "警告：-MergeOob 文件 Role=$($badB.Role)，确认未传反？" }
+    }
+    # 合并：以 A（Inband=服务器侧）为基底按 Item 建 map；B（Oob=编排机侧）行无则补、有则优先级高者胜、同级取 A
+    $map = @{}
+    foreach ($row in $csvA) { $map[[int]$row.Item] = $row }
+    foreach ($row in $csvB) {
+        $item = [int]$row.Item
+        if (-not $map.ContainsKey($item)) { $map[$item] = $row; continue }
+        if ((Get-StatusPriority ([string]$row.Status)) -gt (Get-StatusPriority ([string]$map[$item].Status))) { $map[$item] = $row }
+    }
+    $items = @($map.Keys | Sort-Object | ForEach-Object { $map[$_] })
+}
+
 # ---- 默认值解析 ----
 if ($CapScript -eq "") { $CapScript = Join-Path $PSScriptRoot "Check-ServerCapabilities.ps1" }
-if (-not (Test-Path -LiteralPath $CapScript)) { Write-Error "探测脚本不存在: $CapScript"; Write-CmdLog -Script 'Run-ServerAssessment' -State End -Result ("FAIL: 探测脚本不存在: " + $CapScript) -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds; exit 1 }
+if (-not $mergeMode -and -not (Test-Path -LiteralPath $CapScript)) { Write-Error "探测脚本不存在: $CapScript"; Write-CmdLog -Script 'Run-ServerAssessment' -State End -Result ("FAIL: 探测脚本不存在: " + $CapScript) -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds; exit 1 }
 if ($OutDir -eq "") { $OutDir = Join-Path (Split-Path -Parent $PSScriptRoot) "results\assessment" }
 if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
 if ($MachineName -eq "") {
@@ -64,27 +135,30 @@ if ($MachineName -eq "") {
 
 Write-Host "===== 服务器测试能力一键评估：$MachineName ====="
 
-# 密码：指定 BMC 且未显式提供 → 管道/交互提示一次（置于 $CapScript 调用之前）
-if ($BmcHost -and -not $BmcPass) { $BmcPass = Read-BmcPass -Prompt "BMC 密码（$BmcHost）" }
+# 密码：指定 BMC 且未显式提供 → 管道/交互提示一次（合并模式无需 BMC，跳过）
+if (-not $mergeMode -and $BmcHost -and -not $BmcPass) { $BmcPass = Read-BmcPass -Prompt "BMC 密码（$BmcHost）" }
 
-# ---- 调用能力探测脚本（-OutCsv 落盘结构化结果；写入项目内 results\assessment，保留可追溯） ----
-$capCsv = Join-Path $OutDir ("$MachineName-cap.csv")
-# 用 hashtable splat 可靠绑定命名参数（数组 splat 传 -Local 开关会失效）
-$capArgs = @{ IpmiTool = $IpmiTool; OutCsv = $capCsv }
-if ($Local) { $capArgs['Local'] = $true }
-if ($BmcHost) {
-    $capArgs['BmcHost'] = $BmcHost
-    $capArgs['BmcUser'] = $BmcUser
-    $capArgs['BmcPass'] = $BmcPass
-}
+# ---- 正常模式：调用能力探测脚本（-OutCsv 落盘结构化结果；写入项目内 results\assessment，保留可追溯） ----
+if (-not $mergeMode) {
+    $capCsv = Join-Path $OutDir ("$MachineName-cap.csv")
+    # 用 hashtable splat 可靠绑定命名参数（数组 splat 传 -Local 开关会失效）
+    $capArgs = @{ IpmiTool = $IpmiTool; OutCsv = $capCsv }
+    if ($Local) { $capArgs['Local'] = $true }
+    if ($BmcHost) {
+        $capArgs['BmcHost'] = $BmcHost
+        $capArgs['BmcUser'] = $BmcUser
+        $capArgs['BmcPass'] = $BmcPass
+    }
+    if ($VerifyPowerCycle) { $capArgs['VerifyPowerCycle'] = $true }
 
-& $CapScript @capArgs
-if (-not (Test-Path -LiteralPath $capCsv)) {
-    Write-Error "能力探测未产出报告，中止。"
-    Write-CmdLog -Script 'Run-ServerAssessment' -State End -Result 'FAIL: 能力探测未产出报告' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
-    exit 1
+    & $CapScript @capArgs
+    if (-not (Test-Path -LiteralPath $capCsv)) {
+        Write-Error "能力探测未产出报告，中止。"
+        Write-CmdLog -Script 'Run-ServerAssessment' -State End -Result 'FAIL: 能力探测未产出报告' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+        exit 1
+    }
+    $items = @(Import-Csv -LiteralPath $capCsv)
 }
-$items = Import-Csv -LiteralPath $capCsv
 
 # ---- 每项建议动作 ----
 function Get-Recommendation {
@@ -140,10 +214,18 @@ $assess | Export-Csv -LiteralPath $assFile -NoTypeInformation -Encoding UTF8
 Write-Host "评估报告已保存: $assFile"
 
 # ---- 汇总文本（下一步动作） ----
+# 正常模式 → 角色行；合并模式 → 合并来源行
+$roleOrMerge = if ($mergeMode) {
+    "合并来源: 服务器 $MergeInband + 编排机 $MergeOob"
+} else {
+    $roleTxt = if ($items.Count -gt 0 -and $items[0].PSObject.Properties.Name -contains 'Role') { [string]$items[0].Role } else { '未知' }
+    "角色: $roleTxt"
+}
 $lines = @(
     "===== 服务器测试能力评估：$MachineName =====",
     ("探测时间: {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")),
     ("带内: {0} | 带外 BMC: {1}" -f $(if ($Local) { "已探测" } else { "未执行(-Local)" }), $(if ($BmcHost) { $BmcHost } else { "未指定" })),
+    $roleOrMerge,
     ("汇总: 可直接开测 $can 项 | 需条件 $cond 项 | 需补探测 $need 项 | 外包 $out 项"),
     ""
 )

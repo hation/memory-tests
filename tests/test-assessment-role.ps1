@@ -90,5 +90,43 @@ Assert ((Get-CapStatus $t.Csv 10) -match '^需编排机') "unreachable+Verify �
 Remove-Item $t.Csv -Force -ErrorAction SilentlyContinue
 
 Write-Host "  [caps] Check-ServerCapabilities 角色化端到端 OK"
+
+# ============================================================================
+# Task 5 Run-ServerAssessment 合并模式 + VerifyPowerCycle 透传
+# ============================================================================
+$assess = Join-Path $PSScriptRoot "..\scripts\Run-ServerAssessment.ps1"
+$dir = Join-Path $env:TEMP ("assess-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $dir | Out-Null
+# 服务器侧 CSV（含 Role 列）
+$csvA = Join-Path $dir "srv-inband.csv"
+@("Item,Name,Status,Role","4,ECC 纠错功能验证,可测(ECC 平台),被测服务器","10,反复上电掉电循环,需编排机(BMC 不可达: x),被测服务器","6,电压裕量,外包(可编程电源+示波器),被测服务器") | Set-Content $csvA -Encoding UTF8
+# 编排机侧 CSV（含 Role 列）
+$csvB = Join-Path $dir "srv-oob.csv"
+@("Item,Name,Status,Role","4,ECC 纠错功能验证,需带内(服务器本机跑),编排机","10,反复上电掉电循环,可测(IPMI 断电循环),编排机","6,电压裕量,外包(可编程电源+示波器),编排机") | Set-Content $csvB -Encoding UTF8
+$outDir = Join-Path $dir "out"
+$o = & $ps -NoProfile -File $assess -MergeInband $csvA -MergeOob $csvB -MachineName srv01 -OutDir $outDir 2>&1 | Out-String
+$merged = Import-Csv (Join-Path $outDir "srv01-assessment.csv")
+Assert ((($merged | Where-Object { $_.Item -eq '10' }).Status) -match '^可测') "合并 → 第10项取编排机(可测)"
+Assert ((($merged | Where-Object { $_.Item -eq '4' }).Status) -match '^可测') "合并 → 第4项取服务器(可测 ECC)"
+Assert ((($merged | Where-Object { $_.Item -eq '6' }).Status) -match '^外包') "合并 → 第6项外包"
+
+# Role 传反 → 警告但结果正确
+$csvA2 = Join-Path $dir "srv-inband-roleOob.csv"
+@("Item,Name,Status,Role","10,反复上电掉电循环,需编排机(BMC 不可达: x),编排机") | Set-Content $csvA2 -Encoding UTF8
+$o2 = & $ps -NoProfile -File $assess -MergeInband $csvA2 -MergeOob $csvB -MachineName srv01 -OutDir $outDir 2>&1 | Out-String
+Assert ($o2 -match '警告：-MergeInband') "Role 不符 → 输出警告"
+
+# 旧版无 Role 列 → 照常合并
+$csvA3 = Join-Path $dir "srv-inband-legacy.csv"
+@("Item,Name,Status","10,反复上电掉电循环,需编排机(BMC 不可达: x)") | Set-Content $csvA3 -Encoding UTF8
+$o3 = & $ps -NoProfile -File $assess -MergeInband $csvA3 -MergeOob $csvB -MachineName srv01 -OutDir $outDir 2>&1 | Out-String
+$merged3 = Import-Csv (Join-Path $outDir "srv01-assessment.csv")
+Assert ((($merged3 | Where-Object { $_.Item -eq '10' }).Status) -match '^可测') "旧版无Role → 照常合并(第10项可测)"
+
+# 只给一个合并参数 → 报错非0退出
+$o4 = & $ps -NoProfile -File $assess -MergeInband $csvA -MachineName srv01 2>&1 | Out-String
+Assert ($o4 -match 'MergeOob') "只给 MergeInband → 报错提示 MergeOob"
+Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "  [assess] Run-ServerAssessment 合并模式 OK"
 Write-Host ""
 Write-Host "test-assessment-role: ALL PASS"
