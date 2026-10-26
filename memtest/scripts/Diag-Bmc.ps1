@@ -34,6 +34,10 @@ if ($BmcHost -eq "") {
 . $PSScriptRoot\lib_common.ps1
 $ErrorActionPreference = 'Stop'
 
+# 指令记录：本次调用入库（Help 已处理；BMC 密码等敏感参数由 Write-CmdLog 打码）
+$scriptStartTime = Get-Date
+Write-CmdLog -Script 'Diag-Bmc' -CmdArgs $MyInvocation.Line -State Start
+
 # 内置 ipmitool 自动发现（同 Check-ServerCapabilities）
 if ($IpmiTool -eq "ipmitool") {
     $bundled = Join-Path (Split-Path -Parent $PSScriptRoot) "tools\ipmitool\ipmitool.exe"
@@ -177,6 +181,8 @@ if ($failSteps.Count -eq 0) {
             Write-Host ("  {0}: SOL 探测失败 → ①BMC 未开 SOL ②会话被占用(session already active) ③账号权限不足，参考 docs/15 §3" -f $s.Name)
         }
     }
+    Write-CmdLog -Script 'Diag-Bmc' -State End -Result ("FAIL: " + $failSteps.Count + "/" + $steps.Count + " 步失败") -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 1
 }
+Write-CmdLog -Script 'Diag-Bmc' -State End -Result 'OK' -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
 exit 0

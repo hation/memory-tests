@@ -49,9 +49,13 @@ if ($Help) {
     exit 0
 }
 
+# 指令记录：本次调用入库（Help 已处理；BMC 密码等敏感参数由 Write-CmdLog 打码）
+$scriptStartTime = Get-Date
+Write-CmdLog -Script 'Run-ServerAssessment' -CmdArgs $MyInvocation.Line -State Start
+
 # ---- 默认值解析 ----
 if ($CapScript -eq "") { $CapScript = Join-Path $PSScriptRoot "Check-ServerCapabilities.ps1" }
-if (-not (Test-Path -LiteralPath $CapScript)) { Write-Error "探测脚本不存在: $CapScript"; exit 1 }
+if (-not (Test-Path -LiteralPath $CapScript)) { Write-Error "探测脚本不存在: $CapScript"; Write-CmdLog -Script 'Run-ServerAssessment' -State End -Result ("FAIL: 探测脚本不存在: " + $CapScript) -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds; exit 1 }
 if ($OutDir -eq "") { $OutDir = Join-Path (Split-Path -Parent $PSScriptRoot) "results\assessment" }
 if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
 if ($MachineName -eq "") {
@@ -77,6 +81,7 @@ if ($BmcHost) {
 & $CapScript @capArgs
 if (-not (Test-Path -LiteralPath $capCsv)) {
     Write-Error "能力探测未产出报告，中止。"
+    Write-CmdLog -Script 'Run-ServerAssessment' -State End -Result 'FAIL: 能力探测未产出报告' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 1
 }
 $items = Import-Csv -LiteralPath $capCsv
@@ -156,3 +161,4 @@ if ($out -gt 0) {
 $sumTxt = Join-Path $OutDir "$MachineName-assessment.txt"
 $lines | Out-File -LiteralPath $sumTxt -Encoding UTF8
 Write-Host "汇总文本已保存: $sumTxt"
+Write-CmdLog -Script 'Run-ServerAssessment' -State End -Result 'OK' -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds

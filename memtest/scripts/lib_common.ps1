@@ -628,3 +628,44 @@ function ConvertTo-GrubCfg {
     }
     return $sb.ToString()
 }
+
+# 指令记录（cmdlog）：把本项目每次脚本调用记入 <包根>\results\cmdlog\commands-YYYY-MM-DD.csv。
+# 常开、CSV、按日期滚动；敏感参数（-BmcPass/-P 密码）自动打码为 ***。
+function Write-CmdLog {
+    param(
+        [string]$Script,
+        [string]$CmdArgs = '',
+        [string]$State = 'Start',
+        [string]$Result = '',
+        [int]$ExitCode = 0,
+        [double]$DurationSec = 0
+    )
+    $masked = $CmdArgs
+    foreach ($re in @(
+        '(-BmcPass\s+)(\S+)',
+        '(-BmcPass=)(\S+)',
+        '(-P\s+)(\S+)',
+        '(-P=)(\S+)'
+    )) {
+        $masked = $masked -replace $re, ('${1}' + '***')
+    }
+    $row = [PSCustomObject]@{
+        Timestamp    = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        Machine      = $env:COMPUTERNAME
+        Dir          = (Get-Location).Path
+        Script       = $Script
+        Args         = $masked
+        State        = $State
+        Result       = $Result
+        ExitCode     = $ExitCode
+        DurationSec  = $DurationSec
+    }
+    $logDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'results\cmdlog'
+    if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    $file = Join-Path $logDir ("commands-{0:yyyy-MM-dd}.csv" -f (Get-Date))
+    if (-not (Test-Path -LiteralPath $file)) {
+        $row | Export-Csv -LiteralPath $file -NoTypeInformation -Encoding UTF8
+    } else {
+        $row | ConvertTo-Csv -NoTypeInformation | Select-Object -Skip 1 | Add-Content -LiteralPath $file -Encoding UTF8
+    }
+}
