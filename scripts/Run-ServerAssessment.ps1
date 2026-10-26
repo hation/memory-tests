@@ -158,6 +158,12 @@ if (-not $mergeMode) {
         exit 1
     }
     $items = @(Import-Csv -LiteralPath $capCsv)
+    # cap CSV 按角色重命名（<机器>-cap-<角色>.csv）：服务器与编排机用同一 MachineName 不再同名覆盖，
+    # 合并时两机文件天然区分可直接使用
+    $capRole = if ($items.Count -gt 0 -and $items[0].PSObject.Properties.Name -contains 'Role') { [string]$items[0].Role } else { '未知' }
+    $capFinal = Join-Path $OutDir ("$MachineName-cap-$capRole.csv")
+    if ($capFinal -ne $capCsv) { Move-Item -LiteralPath $capCsv -Destination $capFinal -Force }
+    $capCsv = $capFinal
 }
 
 # ---- 每项建议动作 ----

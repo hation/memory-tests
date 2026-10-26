@@ -558,7 +558,7 @@ function Test-BmcRole {
         $effective = $attempt
     }
 
-    $errText = ($errLines -join ' | ')
+    $errText = (($errLines | Select-Object -Unique) -join ' | ')
     if ($errText -match $connRe) {
         return [PSCustomObject]@{ Role = 'Server'; Detail = "BMC 不可达: $errText"; CipherArgs = $effective; BmcVendor = '' }
     }

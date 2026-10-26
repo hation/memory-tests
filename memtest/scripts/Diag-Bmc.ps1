@@ -137,7 +137,11 @@ try {
 }
 Start-Sleep -Milliseconds 500
 # 释放 SOL 通道：探测强杀进程后 BMC 可能残留 payload（报 "already active"），主动 sol deactivate（失败忽略）
-& $IpmiTool @($a + @("sol", "deactivate")) 2>$null | Out-Null
+# EAP 守卫：顶层 EAP=Stop 会把原生 stderr（如 BMC 不可达时的 Could not open socket）升级为终止错误噪声，临时切 Continue 压掉
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try { & $IpmiTool @($a + @("sol", "deactivate")) 2>$null | Out-Null }
+finally { $ErrorActionPreference = $prevEap }
 if (Test-Path $solErrFile) {
     $errRaw = Get-Content $solErrFile -Raw -ErrorAction SilentlyContinue
     if ($null -ne $errRaw) { $solErrText = $errRaw.Trim() }

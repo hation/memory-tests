@@ -13,6 +13,7 @@ $env:FAKE_IPMI_MODE = 'unreachable'
 $r = Test-BmcRole -IpmiTool $fake -IpmiArgsBase $base
 Assert ($r.Role -eq 'Server') "unreachable → Server"
 Assert ($r.Detail -match '^BMC 不可达') "unreachable → Detail 前缀"
+Assert (([regex]::Matches($r.Detail, 'Could not open socket!')).Count -eq 1) "unreachable → Detail 错误去重(三套件错误只留一条)"
 
 $env:FAKE_IPMI_MODE = 'auth'
 $r = Test-BmcRole -IpmiTool $fake -IpmiArgsBase $base
@@ -135,5 +136,21 @@ $o4 = & $ps -NoProfile -File $assess -MergeInband $csvA -MachineName srv01 2>&1 
 Assert ($o4 -match 'MergeOob') "只给 MergeInband → 报错提示 MergeOob"
 Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "  [assess] Run-ServerAssessment 合并模式 OK"
+
+# ============================================================================
+# 优化：Run-ServerAssessment 正常模式 cap CSV 按角色命名（避免两机同名覆盖）
+# ============================================================================
+$dirN = Join-Path $env:TEMP ("assessN-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $dirN | Out-Null
+$env:FAKE_IPMI_MODE = 'ok'
+"pw" | & $ps -NoProfile -File $assess -BmcHost 1.2.3.4 -BmcUser u -IpmiTool $fake -MachineName srv01 -OutDir $dirN 2>&1 | Out-Null
+Assert (Test-Path (Join-Path $dirN "srv01-cap-编排机.csv")) "ok → cap CSV 命名为 srv01-cap-编排机.csv"
+Assert (-not (Test-Path (Join-Path $dirN "srv01-cap.csv"))) "ok → 旧名 srv01-cap.csv 已不存在"
+
+$env:FAKE_IPMI_MODE = 'unreachable'
+"pw" | & $ps -NoProfile -File $assess -BmcHost 1.2.3.4 -BmcUser u -IpmiTool $fake -MachineName srv01 -OutDir $dirN 2>&1 | Out-Null
+Assert (Test-Path (Join-Path $dirN "srv01-cap-被测服务器.csv")) "unreachable → cap CSV 命名为 srv01-cap-被测服务器.csv"
+Remove-Item $dirN -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "  [capname] Run-ServerAssessment cap CSV 角色命名 OK"
 Write-Host ""
 Write-Host "test-assessment-role: ALL PASS"
