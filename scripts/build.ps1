@@ -80,7 +80,8 @@ $scriptFiles = @(
     'check_env.ps1',
     'Diag-Bmc.ps1',
     'New-MemtestSolIso.ps1',
-    'Smoke-MemtestIso.ps1'
+    'Smoke-MemtestIso.ps1',
+    'Run-Prime95Stress.ps1'
 )
 Sync-Dir -Src $scriptSrc -Dst $scriptDst -Exclude @('build.ps1')
 foreach ($f in $scriptFiles) {
@@ -205,6 +206,7 @@ foreach ($doc in $docsList) {
 $keyFiles += (Join-Path $KitDir 'boot\memtest.iso')
 $keyFiles += (Join-Path $KitDir 'tools\README-tools.md')
 $keyFiles += (Join-Path $KitDir 'tools\ipmitool\ipmitool.exe')
+$keyFiles += (Join-Path $KitDir 'tools\prime95\prime95.exe')
 $keyFiles += (Join-Path $KitDir 'README.md')
 $keyFiles += (Join-Path $KitDir 'VERSION')
 # db 脚本（可选功能，同步进包则一并纳入校验清单；不存在则跳过，保持向后兼容）
