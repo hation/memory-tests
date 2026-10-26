@@ -224,7 +224,7 @@ $roleOrMerge = if ($mergeMode) {
 $lines = @(
     "===== 服务器测试能力评估：$MachineName =====",
     ("探测时间: {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")),
-    ("带内: {0} | 带外 BMC: {1}" -f $(if ($Local) { "已探测" } else { "未执行(-Local)" }), $(if ($BmcHost) { $BmcHost } else { "未指定" })),
+    ("带内: {0} | 带外 BMC: {1}" -f $(if ($mergeMode) { "合并模式，未执行探测" } elseif ($Local) { "已探测" } else { "未执行(-Local)" }), $(if ($mergeMode) { "合并模式，未执行探测" } elseif ($BmcHost) { $BmcHost } else { "未指定" })),
     $roleOrMerge,
     ("汇总: 可直接开测 $can 项 | 需条件 $cond 项 | 需补探测 $need 项 | 外包 $out 项"),
     ""

@@ -87,6 +87,12 @@ $roleLabel = if ($role -in @('Orchestrator', 'AuthError')) { "编排机" } else 
 $runInband = ($Local) -or ($role -eq 'Server')
 $runOob = ($BmcHost -ne "") -and ($role -eq 'Orchestrator')
 
+# 防护提示（spec §3.1）：-BmcHost 给出但本机被判为被测服务器（BMC 不可达）→
+# 本机可能实为编排机，跑带内的同时输出提示提醒检查网络路径
+if ($BmcHost -ne "" -and $role -eq 'Server') {
+    Write-Warning "若本机实为编排机且 BMC 应可达，请检查网络路径"
+}
+
 # ---------------------------------------------------------------------------
 # 带内探测（CIM）
 # ---------------------------------------------------------------------------
@@ -144,6 +150,11 @@ $oob = [ordered]@{
 if ($runOob) {
     $oob.BmcPresent = $true
     $oob.BmcVendor = $bmcVendor
+    # EAP 守卫：顶层 EAP=Stop 会把原生命令 stderr 升级为终止错误，破坏 Invoke-IpmiProbe 的
+    # {Out;Err;Code} 捕获并让单个探测失败塌缩整块（丢 SolAvailable/HasTempSensors 三态归因）；
+    # 与验证块同款：临时切 Continue，finally 恢复。
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
         # 断电循环能力：chassis status 能返回即具备 chassis 控制
         $r = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs @($cipherArgs + @("chassis", "status"))
@@ -174,6 +185,7 @@ if ($runOob) {
         if ($hasOut) { $oob.SolAvailable = $true }
         Remove-Item $solOut, "$solOut.err" -Force -ErrorAction SilentlyContinue
     } catch { $oob.Error = [string]::Join(' | ', (@($oob.Error, $_.Exception.Message) | Where-Object { $_ })) }
+    finally { $ErrorActionPreference = $prevEap }
 }
 
 # ---------------------------------------------------------------------------
@@ -206,9 +218,11 @@ if ($runOob -and $VerifyPowerCycle) {
                     if ($st -match 'off') { $observedOff = $true }
                     if ($observedOff -and $st -match '\bon\b') { break }
                 }
-                # 收尾：确认 BMC 仍响应且已回到开机
+                # 收尾：确认 BMC 仍响应且已回到开机（spec §3.2 第 5 步是验证的一部分）。
+                # 仅当收尾 Code=0 且输出含 on 才判"已验证"，否则回落人工确认文案，
+                # 避免 power cycle 后服务器持续 off 仍被谎报为已验证。
                 $r = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs @($cipherArgs + @('chassis', 'power', 'status'))
-                if ($observedOff) {
+                if ($observedOff -and $r.Code -eq 0 -and (($r.Out -join ' ') -match '\bon\b')) {
                     $verifyItem10 = '可测(已验证：实测断电重启成功)'
                 } else {
                     $verifyItem10 = '可测(命令已接受，未观察到掉电跳变，断电窗口极短，建议人工确认一次)'
@@ -235,7 +249,7 @@ $canOrt = $canPower -and $oob.HasTempSensors   # ORT 72h：能持续供电满载
 $item5 = if ($role -eq 'Server') { "需编排机($roleDetail)" }
          elseif ($role -eq 'AuthError') { "条件: $roleDetail" }
          elseif ($canPower -and $oob.HasTempSensors) { "可测(需满载72h)" }
-         elseif ($canPower) { "条件：需测温传感器" }
+         elseif ($canPower) { "条件: 需测温传感器" }
          else { "条件: BMC 通但断电循环命令不可用($oob.Error)" }
 $item10 = if ($null -ne $verifyItem10) { $verifyItem10 }
           elseif ($role -eq 'Server') { "需编排机($roleDetail)" }
