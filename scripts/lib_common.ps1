@@ -22,6 +22,7 @@
 #   Get-PythonExe           定位内置 Python 解释器（tools\python 优先，其次 PATH）
 #   Read-BmcPass            BMC 密码读取（已给直接用；空则管道/交互输入）
 #   Invoke-IpmiProbe        调用 ipmitool 探针（stdout/stderr 分离 + 退出码）
+#   Test-BmcRole            三态角色判定（Orchestrator/Server/AuthError，mc info 三套件探测）
 # ============================================================================
 
 # ----------------------------------------------------------------------------
@@ -524,6 +525,47 @@ function Invoke-IpmiProbe {
         }
     }
     return [PSCustomObject]@{ Out = $out; Err = $err; Code = $LASTEXITCODE }
+}
+
+# 服务器角色判定：依次用 base / base+-C 3 / base+-C 17 执行 mc info，
+# 首个成功（Code=0 且有输出）判 Orchestrator（返回生效参数 CipherArgs 与 Manufacturer 解析值）；
+# 全部失败则合并错误文本归因：命中连接级特征 → Server（BMC 不可达），
+# 命中凭据/权限特征 → AuthError，均未命中 → Server 保守兜底（Detail 用原始错误）。
+function Test-BmcRole {
+    param([string]$IpmiTool, [string[]]$IpmiArgsBase)
+
+    $connRe = 'Could not open socket|Unable to connect|Connection refused|Network is unreachable|No route|Timed out|timeout'
+    $authRe = 'Invalid password|Unauthorized|Authentication type|not supported|Unable to establish|Insufficient privilege|RAKP'
+
+    $attempts = @(
+        @($IpmiArgsBase),
+        @($IpmiArgsBase + @('-C', '3')),
+        @($IpmiArgsBase + @('-C', '17'))
+    )
+
+    $errLines = @()
+    $effective = $attempts[$attempts.Count - 1]   # 全失败时兜底为最后一次尝试参数
+    foreach ($attempt in $attempts) {
+        $r = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs ($attempt + @('mc', 'info'))
+        $errLines += $r.Err
+        if ($r.Code -eq 0 -and $r.Out.Count -gt 0) {
+            $vendor = ''
+            foreach ($line in $r.Out) {
+                if ($line -match 'Manufacturer:\s*(.+)') { $vendor = $matches[1].Trim(); break }
+            }
+            return [PSCustomObject]@{ Role = 'Orchestrator'; Detail = ''; CipherArgs = $attempt; BmcVendor = $vendor }
+        }
+        $effective = $attempt
+    }
+
+    $errText = ($errLines -join ' | ')
+    if ($errText -match $connRe) {
+        return [PSCustomObject]@{ Role = 'Server'; Detail = "BMC 不可达: $errText"; CipherArgs = $effective; BmcVendor = '' }
+    }
+    if ($errText -match $authRe) {
+        return [PSCustomObject]@{ Role = 'AuthError'; Detail = "BMC 可达但凭据/权限失败: $errText"; CipherArgs = $effective; BmcVendor = '' }
+    }
+    return [PSCustomObject]@{ Role = 'Server'; Detail = "BMC 不可达: $errText"; CipherArgs = $effective; BmcVendor = '' }
 }
 
 # ----------------------------------------------------------------------------
