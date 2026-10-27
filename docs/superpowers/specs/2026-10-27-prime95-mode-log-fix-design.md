@@ -1,112 +1,138 @@
-# Run-Prime95Stress 修复：-Mode 真正生效 + 无日志假 PASS 校验 —— 设计文档
+# Run-Prime95Stress 修复（v2）：-Mode 完整配置生效 + CPU 活跃判定 —— 设计文档
 
 > 日期：2026-10-27 ｜ 状态：待执行 ｜ 关联：[2026-10-26-prime95-mix-stress-design.md](./2026-10-26-prime95-mix-stress-design.md)（原设计）
-> 变更记录：2026-10-27 初稿。前置实机检查（srv01-a1-ort-p95，2026-09-28）暴露两个缺陷，本规格针对修复。
+> 变更记录：
+> - 2026-10-27 v1 初稿：-Mode 写 WorkPreference + 无日志判 FAIL（已实施并打包 v14）。
+> - 2026-10-27 v2 修正：实机（服务器 10 分钟）与本机实验证明 **v1 两个假设均错**：① 仅写 WorkPreference 不足以让 Blend 生效（缺 StressTester 等完整键）；② v30.19 torture 正常运行**不写 results.txt**（CPU 满载+大内存分配但 360s 无任何结果文件）→ "无日志判 FAIL" 误判正常运行的测试。本规格按实验事实修正。
 
 ## 1. 背景与意图（why）
 
-实机检查结果 `tmp/results-被测试服务器`（srv01-a1-ort-p95，`-Minutes 6 -Mode Blend`）发现两个缺陷：
+服务器 `-Minutes 10 -Mode Blend`（v14）报告 FAIL"未生成 results.txt"。本机实验（temp 目录 + prime95 v30.19b20）证实：
 
-1. **`-Mode` 参数未真正生效**：脚本启动 Prime95 只传 `-t`，不写任何模式配置（原设计 §4.1/§4.3 明确"模式键留待实机冒烟回填，首版仅写 OutputJSON=0"）。报告里的 `Blend` 只是参数透传。归档的 `prime.txt` 为 `WorkPreference=0` —— 按社区 torture 配置编码（GUI 顺序：0=Small FFTs / 1=In-place large FFTs / 2=Blend / 3=Custom）对应 **Small FFTs（纯 CPU 压，几乎不压内存）**，与"混插内存长压"验收意图不符。
-2. **无日志假 PASS**：批次目录归档仅 `prime.txt`，**无 `results.txt` / `screen.log`**。`Get-Prime95LogStats` 对"文件不存在"返回 `ErrorCount=0/HasErrors=$false`，脚本把"整个运行期 Prime95 未写出任何日志"当作"0 错误"→ 判 PASS。6 分钟里 Prime95 未写一行 results.txt（官方 `ResultsFileTimestampInterval` 默认 300 秒，且 Blend 首轮大 FFT 可能未完成；也可能首次运行停在配置对话框未真正开测），**PASS 结论无运行数据支撑**。
+1. **-Mode 需完整 torture 配置键**：仅写 `WorkPreference=2` 时内存不增长（≈647MB，未按 Blend 分配大内存）；补写 `StressTester=1` + `MinTortureFFT=4` + `MaxTortureFFT=8192` + `TortureMem` 后内存升至 **5.4GB**（Blend 大内存分配生效）。**Torture 完整配置键**（从本机 tools\prime95 残留 prime.txt 实测取得）：`StressTester=1`、`UsePrimenet=0`、`TortureHyperthreading=1`、`MinTortureFFT`、`MaxTortureFFT`、`TortureMem`、`WorkPreference`。
+2. **v30.19 torture 不写 results.txt**：360s 实验（CPU=3410s 满载、内存 5.4GB）目录中 **无 results.txt / results.json.txt / screen.log**。whatsnew L1120 确认 torture 的错误计数写 results.txt（**出错时才写**）；常规进度只在 worker 窗口（GUI）显示。→ 原"无日志判 FAIL"把**正常运行的测试误判为 FAIL**。
+3. 脚本旧判定"进程存活+0 错误"实际可正确放行（Prime95 出错时写 results.txt 可被扫描到），只是**缺少"测试是否真正开始"的防呆**（若卡在 GUI 对话框则 CPU 无活动）。
 
-目标：让 `-Mode Blend|Large` 真正写入 Prime95 配置并生效；运行结束若 `results.txt` 从未生成 → 判 FAIL（防假 PASS）。
+目标：让 `-Mode Blend|Large` 通过**完整配置键**真正生效；判定改为 **进程存活 + CPU 活跃（在跑）+ 错误扫描**；**废弃"无日志 FAIL"**；新增 **CPU 无活动（疑似卡对话框）判 FAIL**。
 
 ## 2. 目标 / 非目标 / 反目标
 
 **目标**
-1. `-Mode` 生效：启动前向 Prime95 工作目录写 `prime.txt`，按模式写入 torture 类型键（社区编码，见 §3），使 Blend/Large 真正执行；报告 Mode 列与实际运行一致。
-2. 无日志校验：轮询期跟踪 `results.txt` 是否出现过；运行结束时从未出现 → 判定 FAIL，结论注明"未生成 results.txt"。
-3. 归档一致性：判定依赖的 results.txt 归档缺失时结论自洽（无日志→FAIL，不与 PASS 冲突）。
-4. 单元测试覆盖新增判定分支；`test-prime95.ps1` 全绿。
-5. 文档/帮助同步：脚本 `-Help` 说明模式键与无日志判定；docs/20 相关行同步。
+1. `-Mode` 生效：启动前写完整 torture 配置键（§4.1），Blend 分配大内存、Large 跑大 FFT；报告 Mode 与实际一致。
+2. 判定重构：PASS = 到点 + 未提前退出 + 无错误 + CPU 活跃；FAIL = 提前退出 / 错误 / 时长不足 / **CPU 无活动（进程活着但 CPU 时间不增长，疑似卡对话框）**。
+3. 错误检测保留：轮询 results.txt，出现 FATAL ERROR / Self-test failed / FAILED → 提前停 FAIL（torture 出错时写 results.txt）。
+4. 单元测试覆盖新判定分支（CpuInactive）；`test-prime95.ps1` 全绿。
+5. 文档/帮助同步（-Help、docs/20）。
+6. 重新打包 v14 供服务器实机验证。
 
 **非目标（不做）**
-- 不实现 `-W` 目录隔离（2026-10 实机冒烟结论：`-W` 命令行无效，结果落 exe 目录；维持现状"清 exe 目录旧产物 + 结束后归档"）。
+- 不做 GUI 弹窗自动化点击（本机/服务器诊断均未发现"需点击的对话框"；torture 实际已自动开始）。
+- 不实现 `-W` 目录隔离（维持现状）。
 - 不改 memtest / ORT / 打包流程。
-- 不新增报告列（Status/Conclusion 已能表达无日志原因）。
+- 不新增报告列。
 
 **反目标（做了就算失败）**
-- 报告 Mode 与实际运行模式不一致仍被当作"生效"。
-- 无 results.txt 仍判 PASS（本次缺陷复发）。
-- 破坏 `test-prime95.ps1` 既有用例、master_manifest 列结构。
+- 报告 Mode 与实际运行模式不一致（内存是否大分配可验证）。
+- 正常运行的 torture 被误判 FAIL（v1 的 NoLog 判定必须移除）。
+- 卡对话框/未开始的场景被误判 PASS（CpuInactive 防呆）。
+- 破坏 test-prime95 既有用例、master_manifest 列结构。
 
 ## 3. 约束（已核实事实）
 
-- PowerShell 5.1；脚本沿用 `Write-CmdLog` / `Get-AppVersion` / `Export-Prime95Report` 既有约定。
-- Prime95 v30.19b20 官方文档（内置 `tools\prime95\` readme/undoc/stress）：
-  - `-t` 仅"Run the torture test. Same as Options/Torture Test"（readme L524）——**无命令行模式参数**；模式只能经 prime.txt 配置。
-  - `TortureTest=` / `WorkPreference=` 键名与取值**官方文档未记载**（undoc.txt 全文无匹配）。
-  - 社区共识编码（GUI Torture 对话框单选顺序）：`WorkPreference` 0=Small FFTs / 1=In-place large FFTs / 2=Blend / 3=Custom。`-Mode Large` 对应 1（In-place large FFTs，大 FFT 压内存）。**实机冒烟为前置验收，编码若有出入回填修正**。
-  - `ResultsFileTimestampInterval=300`（undoc L171）：results.txt 默认 300 秒才写一次 → 短时（如 6 分钟）可能 0 次写入，必须靠"进程存活"+"无错误"+"无日志则 FAIL"组合判定。
-  - `BootDelay=90`（undoc L211）：进程启动约 90 秒才开工 → 短压实际运行窗口更小，进一步强化无日志 FAIL 的必要性。
-- 现有判定链：`Get-Prime95Verdict`（PASS ⇔ 足时长 且 0 错误 且 非提前退出）+ `Get-Prime95LogStats`（文件不存在→0 错误）+ `Export-Prime95Report`。测试 `tests/test-prime95.ps1` 覆盖 4 类 Verdict + LogStats + Report。
-- 打包纪律：本次改动属逻辑代码调整，完成后需 `build.ps1 -Zip`（与 ISO 顺序修复一并打包）。
+- PowerShell 5.1；脚本沿用既有约定（Write-CmdLog/Get-AppVersion/Export-Prime95Report）。
+- Prime95 v30.19b20（内置 tools\prime95\）：
+  - `-t` 启动 torture（readme L524 "Same as Options/Torture Test"）；诊断确认启动后主窗口 + N 个 "Worker #N - Torture Test" 窗口，**无独立参数对话框**（UIAutomation 0 按钮；Win32 枚举仅 MDIClient/Worker/statusbar）→ torture 自动开始。
+  - **torture 完整配置键**（本机实测取得）：`StressTester=1`、`UsePrimenet=0`、`TortureHyperthreading=1`、`MinTortureFFT=4`、`MaxTortureFFT=8192`、`TortureMem=<MB>`、`WorkPreference=<0..3>`。GUI 顺序编码：0=Small / 1=In-place large / 2=Blend / 3=Custom。
+  - **torture 常规不写 results.txt**（360s 满载+大内存仍无文件）；出错时写 results.txt（whatsnew L1120 错误计数）。
+  - `BootDelay=90`（undoc L211）：进程启动约 90s 才开工（仅重启后场景；进程刚启动无此延迟）。
+  - `ResultsFileTimestampInterval=300`：results.txt 时间戳间隔（GIMPS 计算任务用，torture 不适用）。
+- 服务器（诊断）：32 个 worker 窗口（32 线程 CPU），无参数对话框，与"torture 自动开始"一致。
+- 打包纪律：代码产物变更 → 打包（v14 内容更新重打）。
 
 ## 4. 方案设计（how）
 
-### 4.1 `scripts/Run-Prime95Stress.ps1` 改动
+### 4.1 `scripts/Run-Prime95Stress.ps1`
 
-**A. 预写 prime.txt 使 `-Mode` 生效**（当前"清空 exe 目录旧产物"之后、"启动 `-t`"之前）：
-
+**A. 预写完整 torture 配置**（清空 exe 目录旧产物之后、启动前）：
+```powershell
+$modeKey = if ($Mode -eq 'Blend') { 2 } elseif ($Mode -eq 'Large') { 1 } else { throw "未知 Mode: $Mode" }
+# TortureMem：本机物理内存的 70%（MB），下限 4096，避免 OOM 且保证 Blend 大内存压测
+$memMB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB)
+$tortureMem = [math]::Max(4096, [int]($memMB * 0.7))
+$primeTxt = @(
+    'StressTester=1',
+    'UsePrimenet=0',
+    "WorkPreference=$modeKey",
+    'TortureHyperthreading=1',
+    'MinTortureFFT=4',
+    'MaxTortureFFT=8192',
+    "TortureMem=$tortureMem",
+    'OutputJSON=0'
+) -join "`n"
+[System.IO.File]::WriteAllText($primeTxtPath, $primeTxt + "`n", utf8NoBom)
 ```
-$modeKey = if ($Mode -eq 'Blend') { 2 } elseif ($Mode -eq 'Large') { 1 } else { throw }
-# 写 <prime95Dir>\prime.txt：UTF-8 无 BOM；OutputJSON=0 保持文本日志，WorkPreference 为 torture 类型（社区编码）
+- NumWorkers/CoresPerTest 不写（Prime95 自动探测，实测会自动补写）。
+- 注释标注键来源（本机实测）与实机验证要求。
+
+**B. CPU 活跃跟踪（防呆，替代 NoLog）**：
+- 轮询循环内（每 30s）：`$p.Refresh(); $cpuNow = $p.CPU`；若 `$cpuNow -le $cpuPrev` 且进程活着 → `$cpuIdleCount++`；否则 `$cpuIdleCount = 0`；记录 `$cpuPrev = $cpuNow`。
+- `$cpuIdleCount -ge 3`（≈90s 无 CPU 活动）且进程存活 → 判"疑似卡住"：记录 `$stuck = $true`，继续轮询到点（不提前杀，避免误杀慢启动；由最终判定兜底）。
+- 首次轮询前 `$cpuPrev = 0`（Prime95 启动后很快有计算，90s 内应有 CPU 增长）。
+
+**C. 判定传参**：
+```powershell
+$stuck = (-not $exitedEarly) -and ($cpuIdleCount -ge 3)
+$verdict = Get-Prime95Verdict -ActualMinutes $actualMin -TargetMinutes $Minutes -ErrorCount $finalStats.ErrorCount -ExitedEarly $exitedEarly -CpuInactive $stuck
 ```
+- 不再使用 NoLogFile（废弃）。
+- results.txt 轮询错误扫描保留（出错时文件会出现错误行 → HasErrors → 提前停 FAIL）。
 
-- 仅写最小键 `WorkPreference=<n>` + `OutputJSON=0`；`NumWorkers`/`CoresPerTest` 不写（交由 Prime95 自动探测，避免写错）。
-- 启动后 Prime95 首次运行会补齐其余键；结束时该 prime.txt 随既有流程 Move 归档（保留证据，供实机核对模式）。
-- 模式映射写成小函数或内联注释；`-Mode` 仍为 `ValidateSet("Blend","Large")`。
+**D. 日志提示**：保留 10 分钟未更新提示；CPU 连续无活动 ≥90s 时提示"CPU 无活动，疑似卡在对话框/未开始"。
 
-**B. 无日志判定**：
+**E. `-Help` 文案**：-Mode 说明改为"经 prime.txt 完整 torture 配置键生效（StressTester/MinTortureFFT/MaxTortureFFT/TortureMem/WorkPreference，本机实测）"；判定说明改为"进程存活 + CPU 活跃 + 无错误 → PASS；CPU 无活动（疑似卡对话框）→ FAIL"。
 
-- 轮询循环内记录 `$resultsSeen`（`Test-Path exe 目录\results.txt` 为真 或 `$stats.LastWriteTime` 非 null 即置位）。
-- 运行结束（非提前退出、到点）时：`$noLog = -not $resultsSeen`。
-- 传给 `Get-Prime95Verdict -NoLogFile $noLog`；PASS 条件增加"且 `NoLogFile=$false`"。
-- 提前退出（`$exitedEarly`）场景已是 FAIL，不叠加 NoLog（结论以提前退出为准）。
-- 归档：`Move-Item` 后若 `$noLog` 且 `Test-Path workDir\results.txt` 仍为假，判定已 FAIL，与归档一致，无需额外动作。
+### 4.2 `scripts/lib_common.ps1`
 
-**C. 日志提示**：保留现有"results.txt 10 分钟未更新"提示；新增提示：运行过半仍未出现 results.txt 时输出"尚未生成 results.txt（写入间隔约 300s，首轮大 FFT 未完成属正常）"，仅提示不判定。
+`Get-Prime95Verdict`：**参数 `[bool]$NoLogFile` 改为 `[bool]$CpuInactive = $false`**；判定链在 ErrorCount 之后：
+```powershell
+elseif ($CpuInactive) {
+    $status = 'FAIL'
+    $reason = 'CPU 无活动(疑似卡在 Torture 对话框或未开始)'
+}
+```
+（v1 的 NoLogFile 分支删除。）
 
-### 4.2 `scripts/lib_common.ps1` 改动
+### 4.3 `tests/test-prime95.ps1`
 
-`Get-Prime95Verdict` 增加可选参数 `[bool]$NoLogFile = $false`：
+- 原 NoLogFile 两例改为 CpuInactive：
+  - `-CpuInactive $true` → FAIL 且 Conclusion 匹配 `CPU 无活动`。
+  - `-CpuInactive $false` → PASS（默认值不破坏既有行为）。
+- 其余用例不动。
 
-- 判定顺序（保持现有）：提前退出 → 时长不足 → ErrorCount>0 → **NoLogFile** → PASS。
-- NoLogFile 触发：`$status='FAIL'; $reason='未生成 results.txt(Prime95 未实际运行或时长过短未完成首轮)'`。
-- 既有调用（不传 NoLogFile）行为不变；返回对象结构不变（Status/Conclusion）。
+### 4.4 文档同步
 
-### 4.3 测试 `tests/test-prime95.ps1` 改动
-
-新增用例（追加到 Get-Prime95Verdict 五类之后）：
-
-- 足时长、0 错误、非提前退出、`NoLogFile=$true` → FAIL 且 Conclusion 匹配 `未生成 results.txt`。
-- 足时长、0 错误、非提前退出、`NoLogFile=$false` → PASS（回归确认参数默认值不破坏既有行为）。
-
-### 4.4 文档/帮助同步
-
-- `Run-Prime95Stress.ps1 -Help`：说明 `-Mode` 经 prime.txt `WorkPreference` 键生效（社区编码，实机冒烟验证）；`results.txt 未生成 → FAIL`。
-- `docs/20-纯命令行压测手册.md` 流程 3（若含 Prime95 表述）同步一句口径；文档标注本次冒烟验证结论后回填编码确认状态。
-- 根 `docs/` 与 `memtest/docs/` 同步（如涉及时）。
+- `-Help`（§4.1 E）。
+- `docs/20-纯命令行压测手册.md` 与 `memtest/docs/20-…`：判定口径行"…且 已生成 results.txt；未生成判 FAIL" 改为 "…且 CPU 活跃（未开始/卡对话框判 FAIL）"；"经 prime.txt WorkPreference 键生效" 改为 "经 prime.txt 完整 torture 配置键生效"。
 
 ## 5. 交给 builder 的决策点
 
-- `WorkPreference` 编码若实机冒烟证实不符（如 Prime95 忽略该键），以冒烟结论回填修正；在脚本注释与文档中如实标注"待实机确认"。
-- 轮询提示阈值沿用现有 10 分钟；"运行过半"提示的具体时机由实现自定。
-- 归档 `screen.log` 缺失不参与判定（results.txt 为准）。
+- TortureMem 取物理内存 70%（下限 4096MB）——若实机 Blend 内存占用过高/过低可调；结论注明实际分配。
+- CPU 无活动阈值 90s（3 次轮询）——若慢启动误判可放宽。
+- MinTortureFFT/MaxTortureFFT=4/8192（Blend 典型范围，实测来源）；Large 模式也可同范围（大 FFT 为主）。
 
 ## 6. 验收口径
 
-1. **单元验收**：`tests/test-prime95.ps1` 全 PASS（含新增 NoLog 两例）；`Get-Prime95Verdict` 不传 NoLogFile 时行为与修改前一致。
-2. **静态检查**：`Run-Prime95Stress.ps1` 无语法错误（`powershell -NoProfile -Command "[scriptblock]::Create((Get-Content -Raw scripts\Run-Prime95Stress.ps1))"`）；改动行与规格一致。
-3. **实机冒烟（前置验收，有服务器后执行）**：服务器跑 `-Minutes 5 -Mode Blend`：
-   - `results\work\<批次>\` 含 `results.txt`（有实际测试进度）；
-   - 归档 `prime.txt` 含 `WorkPreference=2`（Blend）——编码确认；若被 Prime95 改写则按 §5 回填；
-   - 报告 `Mode=Blend`、Status=PASS（足时长+有日志+0 错误）。
-4. 打包：`build.ps1 -Zip`（与 ISO 顺序修复一并），包内关键文件 hash 一致。
+1. **单元**：`test-prime95.ps1` ALL PASS（CpuInactive 两例替换 NoLogFile 两例）。
+2. **静态**：两脚本语法检查通过。
+3. **本机行为回归**（可选）：temp 目录 + 完整配置键跑 60s：进程 CPU 增长、内存大分配（Blend）、报告逻辑不再因无 results.txt 判 FAIL。
+4. **实机（前置，用户服务器）**：`-Minutes 5 -Mode Blend` 冒烟：
+   - 运行期任务管理器 **CPU≈100% + 内存 ≥ 数 GB**（Blend 生效）；
+   - 报告 `Status=PASS`（到点 + 无错误 + CPU 活跃），`Mode=Blend`；
+   - 归档 `work\<批次>\` 含 `prime.txt`（含 StressTester=1/WorkPreference=2 等）。
+5. 打包：`build.ps1 -Bump -Zip`（v14 内容更新）→ zip 校验。
 
 ## 7. 待办与已知风险
 
-- `WorkPreference` 编码无官方依据 → 实机冒烟为前置验收；未通过前报告 Mode 列语义为"目标模式"，结论注明"模式键待实机确认"。
-- 短时（< 首轮完成）压测本就可能无 results.txt → 无日志 FAIL 会把这类短压判失败；这是预期行为（时长过短无法证明测试真实运行），帮助文案已说明。
-- 冒烟需在服务器执行（本机无服务器），本次交付含冒烟操作手册片段，由用户实机执行。
+- TortureMem 70% 动态值需实机确认（内存大的服务器分配大；OOM 风险低，Prime95 分配失败会报错）。
+- torture 错误写 results.txt 的时机未实机验证（错误检测依赖此）；若实机发现出错也不写，需增加窗口文本轮询（备选，复杂，暂不做）。
+- v1 已提交/打包的内容（NoLogFile 判定）本次修正后需重新提交与打包。
