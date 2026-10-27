@@ -31,6 +31,10 @@
 #   Get-Prime95Verdict       Prime95 结论判定（时长不足/错误/提前退出 纯函数）
 #   Get-Prime95LogStats      Prime95 日志错误统计（FATAL ERROR/Self-test failed/FAILED）
 #   Export-Prime95Report     Prime95 报告（<批次>-prime95-report.csv + master 合成行）
+#   New-TaskChecklist        建立验收批次任务清单（总览 17 项 + 10 张流程清单，读评估标注）
+#   Update-TaskChecklist     按环节名更新流程清单行（状态/结果/产物；文件不存在静默）
+#   Update-OverviewRow       按测试项编号更新总览行（状态/结果摘要/原因；文件不存在静默）
+#   Merge-TaskChecklists     服务器清单并入编排机（流程清单带入；总览/混插逐行取有状态方）
 # ============================================================================
 
 # ----------------------------------------------------------------------------
@@ -957,7 +961,7 @@ function Get-Prime95Verdict {
         [int]$TargetMinutes,
         [int]$ErrorCount = 0,
         [bool]$ExitedEarly = $false,
-        [bool]$NoLogFile = $false
+        [bool]$CpuInactive = $false
     )
 
     $status = 'PASS'
@@ -974,9 +978,9 @@ function Get-Prime95Verdict {
         $status = 'FAIL'
         $reason = "检测到错误(ErrorCount=${ErrorCount})"
     }
-    elseif ($NoLogFile) {
+    elseif ($CpuInactive) {
         $status = 'FAIL'
-        $reason = '未生成 results.txt(Prime95 未实际运行或时长过短未完成首轮)'
+        $reason = 'CPU 无活动(疑似卡在 Torture 对话框或未开始)'
     }
     if ($status -eq 'PASS') {
         $conclusion = "Prime95 长压通过：{0} 分钟 ≥ 目标 {1} 分钟，0 错误" -f $ActualMinutes, $TargetMinutes
@@ -1071,6 +1075,452 @@ function Export-Prime95Report {
     $all.AddRange([object[]]@($masterRow))
     $all | Select-Object $reportColumns | Export-Csv -Path $master -NoTypeInformation -Encoding UTF8
     Write-Host "累计总表已更新: $master（共 $($all.Count) 条）"
+}
+
+# ----------------------------------------------------------------------------
+# 任务清单函数区（任务进度追踪）：批次总览 + 流程清单生成/更新/合并
+# 清单按验收批次组织：<ResultsDir>\<验收批次>\任务清单-总览.md + 任务清单-<流程>.md（10 张）。
+# 状态集：✓ 做成 / ✗ 没做成 / ─ 本次没做 / ⏳ 进行中 / ⚠ 无法测试。
+# 全部 UTF-8 读写（ReadAllText / WriteAllText 无 BOM、\r\n），防中文乱码。
+# ----------------------------------------------------------------------------
+
+# 总览 17 项定义（编号/名称/关联流程清单；名称与手册 20 对应）
+$script:OverviewItems = @(
+    @{ Item = 1;  Name = 'SPD 信息校验';            Flow = '建档' },
+    @{ Item = 2;  Name = '基础识别/容量频率';       Flow = '建档' },
+    @{ Item = 3;  Name = '全地址读写覆盖(Memtest)'; Flow = 'Memtest' },
+    @{ Item = 4;  Name = 'ECC 纠错功能验证';        Flow = 'ECC' },
+    @{ Item = 5;  Name = '72h ORT 老化烧机';        Flow = 'ORT' },
+    @{ Item = 6;  Name = '电压裕量';                Flow = 'L3外包' },
+    @{ Item = 7;  Name = '时序/SI';                 Flow = 'L3外包' },
+    @{ Item = 8;  Name = '高低温循环';              Flow = 'L3外包' },
+    @{ Item = 9;  Name = 'THB 湿热偏压';            Flow = 'L3外包' },
+    @{ Item = 10; Name = '反复上电掉电循环';        Flow = '断电循环' },
+    @{ Item = 11; Name = '静电ESD';                 Flow = 'L3外包' },
+    @{ Item = 12; Name = '机械振动';                Flow = 'L3外包' },
+    @{ Item = 13; Name = '机械冲击';                Flow = 'L3外包' },
+    @{ Item = 14; Name = '弯曲扭曲';                Flow = 'L3外包' },
+    @{ Item = 15; Name = '多平台兼容';              Flow = '多平台' },
+    @{ Item = 16; Name = '多通道混插压力';          Flow = '混插' },
+    @{ Item = 17; Name = '外观/焊点/电性复检';      Flow = '目检电性' }
+)
+
+# 10 张流程清单环节集（环节名 = Update-TaskChecklist -Key 的定位键）
+$script:FlowChecklists = @(
+    @{ File = '任务清单-建档.md'; Steps = @(
+        @{ Key = '识别条子'; Desc = '识别被测内存条（SN/型号/容量）' },
+        @{ Key = '生成清单'; Desc = '生成验收批次任务清单' },
+        @{ Key = '与预期比对(防调包)'; Desc = '与预期清单比对，确认无调包' }
+    )},
+    @{ File = '任务清单-Memtest.md'; Steps = @(
+        @{ Key = '快筛'; Desc = '快筛轮（快速覆盖）' },
+        @{ Key = '1轮全项'; Desc = '1 轮全项压测' },
+        @{ Key = '2轮快筛'; Desc = '2 轮快筛' },
+        @{ Key = '2轮全项'; Desc = '2 轮全项压测' },
+        @{ Key = '4轮快筛'; Desc = '4 轮快筛' },
+        @{ Key = '4轮全项'; Desc = '4 轮全项压测（最终验收）' }
+    )},
+    @{ File = '任务清单-混插.md'; Steps = @(
+        @{ Key = 'Memtest 混插组合'; Desc = 'Memtest 混插组合压力测试' },
+        @{ Key = 'Prime95 长压'; Desc = 'Prime95 长压测试' }
+    )},
+    @{ File = '任务清单-ECC.md'; Steps = @(
+        @{ Key = 'ECC 计数判读'; Desc = 'ECC 错误计数判读' },
+        @{ Key = 'WHEA 交叉验证(可选)'; Desc = 'WHEA 事件交叉验证（可选）' }
+    )},
+    @{ File = '任务清单-断电循环.md'; Steps = @(
+        @{ Key = '能力确认'; Desc = '确认 BMC 断电循环能力' },
+        @{ Key = '200 次循环'; Desc = '200 次上电掉电循环' }
+    )},
+    @{ File = '任务清单-ORT.md'; Steps = @(
+        @{ Key = '72h 满载'; Desc = '72 小时满载老化' },
+        @{ Key = '全程测温'; Desc = '全程温度监测' },
+        @{ Key = '口径B结论'; Desc = '口径 B 结论判定' }
+    )},
+    @{ File = '任务清单-Prime95.md'; Steps = @(
+        @{ Key = '冒烟(首用)'; Desc = '首用冒烟测试' },
+        @{ Key = '正式长压'; Desc = '正式长压测试' }
+    )},
+    @{ File = '任务清单-多平台.md'; Steps = @(
+        @{ Key = '另一台识别'; Desc = '另一平台识别内存' },
+        @{ Key = '快筛'; Desc = '快筛测试' },
+        @{ Key = '满载'; Desc = '满载测试' }
+    )},
+    @{ File = '任务清单-目检电性.md'; Steps = @(
+        @{ Key = '目检金手指焊点'; Desc = '目检金手指与焊点' },
+        @{ Key = '万用表电性'; Desc = '万用表电性复检' }
+    )},
+    @{ File = '任务清单-L3外包.md'; Steps = @(
+        @{ Key = '电压/时序/高低温/湿热/ESD/振动/冲击/弯曲 送检'; Desc = '外包送检（L3）' }
+    )}
+)
+
+# 评估 Status → 总览状态/原因 映射（纯函数）：
+#   可测*→─ 等待执行；需编排机/需带内→─ 待执行（换执行方）；
+#   需 BMC/需条件*→⚠ 无法测试+Action 原因；外包*→⚠ 无法测试+外包送检（L3）；其他→─ 等待执行。
+function ConvertTo-ChecklistOverviewStatus {
+    param([string]$AssessStatus, [string]$Action)
+    if ($AssessStatus -like '可测*') { return @{ Status = '─ 等待执行'; Reason = '' } }
+    if ($AssessStatus -like '需编排机*' -or $AssessStatus -like '需带内*') { return @{ Status = '─ 待执行'; Reason = '' } }
+    if ($AssessStatus -like '外包*') { return @{ Status = '⚠ 无法测试'; Reason = '外包送检（L3）' } }
+    if ($AssessStatus -like '需*' -or $AssessStatus -like '条件*') { return @{ Status = '⚠ 无法测试'; Reason = $Action } }
+    return @{ Status = '─ 等待执行'; Reason = '' }
+}
+
+# 校验状态值（接受符号或完整文案，如 '✓' 或 '✓ 做成'）；非法 → throw
+function Test-ChecklistStatus {
+    param([string]$Status)
+    if ($Status -eq '') { return $true }
+    if ($Status -notmatch '^[✓✗─⏳⚠]') {
+        throw "非法状态值: '$Status'（状态集：✓ 做成 / ✗ 没做成 / ─ 本次没做 / ⏳ 进行中 / ⚠ 无法测试）"
+    }
+    return $true
+}
+
+# 建立验收批次任务清单：写 任务清单-总览.md + 10 张流程清单，读评估 CSV 标注环境不支持项。
+# 评估 CSV 缺失/损坏 → 提示且清单仍生成（全 ─），不抛异常。返回清单目录。
+function New-TaskChecklist {
+    param(
+        [string]$ChecklistBatch = "",
+        [string]$MachineName = "",
+        [string]$ResultsDir = "",
+        [string]$AssessmentCsv = ""
+    )
+    if ($ChecklistBatch -eq "") { $ChecklistBatch = "batch_$(Get-Date -Format 'yyyyMMdd-HHmmss')" }
+    if ($MachineName -eq "") { $MachineName = $env:COMPUTERNAME }
+    if ($ResultsDir -eq "") { $ResultsDir = Join-Path (Split-Path -Parent $PSScriptRoot) "results" }
+
+    # ---- 定位评估 CSV（显式路径 > <机器名>-assessment.csv > srv01-assessment.csv） ----
+    $assessPath = $AssessmentCsv
+    if ($assessPath -eq "") {
+        $try1 = Join-Path $ResultsDir "assessment\$MachineName-assessment.csv"
+        if (Test-Path -LiteralPath $try1) { $assessPath = $try1 }
+        else {
+            $try2 = Join-Path $ResultsDir "assessment\srv01-assessment.csv"
+            if (Test-Path -LiteralPath $try2) { $assessPath = $try2 }
+        }
+    }
+    $assessMap = @{}
+    $assessOk = $false
+    $assessNote = ''
+    if ($assessPath -and (Test-Path -LiteralPath $assessPath)) {
+        try {
+            $rows = @(Read-CsvManifest -Path $assessPath)
+            if ($rows.Count -gt 0 -and $rows[0].PSObject.Properties.Name -contains 'Item' -and $rows[0].PSObject.Properties.Name -contains 'Status') {
+                foreach ($r in $rows) {
+                    $item = 0
+                    if ([int]::TryParse([string]$r.Item, [ref]$item)) { $assessMap[$item] = $r }
+                }
+                $assessOk = $true
+            } else {
+                $assessNote = '评估 CSV 列缺失（需 Item/Status/Action 列）'
+            }
+        } catch {
+            $assessNote = '评估 CSV 损坏，无法解析'
+        }
+    } else {
+        $assessNote = '未找到能力评估 CSV（可先跑 Run-ServerAssessment 或手动标注）'
+    }
+    if (-not $assessOk) {
+        Write-Host "提示：$assessNote；任务清单已生成（状态全 ─）。"
+    }
+
+    # ---- 条子摘要（读建档 results\<批次>.csv 若存在，否则留空） ----
+    $stickSummary = ''
+    $jdCsv = Join-Path $ResultsDir "$ChecklistBatch.csv"
+    if (Test-Path -LiteralPath $jdCsv) {
+        try {
+            $jdRows = @(Read-CsvManifest -Path $jdCsv)
+            if ($jdRows.Count -gt 0) {
+                $sns = @($jdRows | ForEach-Object { $_.SerialNumber } | Where-Object { $_ })
+                $stickSummary = "$($jdRows.Count) 条，SN: $($sns -join '、')"
+            }
+        } catch { $stickSummary = '' }
+    }
+
+    # ---- 建目录 ----
+    if (-not (Test-Path -LiteralPath $ResultsDir)) { New-Item -ItemType Directory -Path $ResultsDir -Force | Out-Null }
+    $dir = Join-Path $ResultsDir $ChecklistBatch
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+
+    $now = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $statusLegend = '## 执行情况（✓ 做成 / ✗ 没做成 / ─ 本次没做 / ⏳ 进行中 / ⚠ 无法测试）'
+
+    # ---- 写总览 ----
+    $ov = New-Object System.Collections.Generic.List[string]
+    [void]$ov.Add('# 任务清单-总览')
+    [void]$ov.Add('')
+    [void]$ov.Add("- 验收批次：$ChecklistBatch")
+    [void]$ov.Add("- 被测服务器：$MachineName")
+    [void]$ov.Add("- 条子摘要：$(if ($stickSummary) { $stickSummary } else { '无' })")
+    [void]$ov.Add("- 计划：$ChecklistBatch")
+    [void]$ov.Add("- 开始时间：$now")
+    [void]$ov.Add('')
+    [void]$ov.Add($statusLegend)
+    [void]$ov.Add('')
+    [void]$ov.Add('| # | 测试项 | 状态 | 结果摘要 | 原因 | 关联流程清单 |')
+    [void]$ov.Add('|---|--------|------|---------|------|-------------|')
+    $cnt = @{ '✓' = 0; '✗' = 0; '─' = 0; '⏳' = 0; '⚠' = 0 }
+    foreach ($it in $script:OverviewItems) {
+        $status = '─ 等待执行'; $reason = ''
+        # 环境依赖映射：1-3/17 无依赖；其余读对应评估行（6-9/11-14 外包行 → ⚠+外包送检）
+        if ($it.Item -notin @(1, 2, 3, 17) -and $assessOk -and $assessMap.ContainsKey($it.Item)) {
+            $m = ConvertTo-ChecklistOverviewStatus -AssessStatus ([string]$assessMap[$it.Item].Status) -Action ([string]$assessMap[$it.Item].Action)
+            $status = $m.Status; $reason = $m.Reason
+        }
+        $sym = $status.Substring(0, 1)
+        if ($cnt.ContainsKey($sym)) { $cnt[$sym]++ }
+        [void]$ov.Add(("| {0} | {1} | {2} |  | {3} | {4} |" -f $it.Item, $it.Name, $status, $reason, $it.Flow))
+    }
+    [void]$ov.Add('')
+    $note = ''
+    if (-not $assessOk) { $note = '（备注：评估 CSV 缺失或损坏，需先跑能力评估或手动标注）' }
+    [void]$ov.Add("总结论: ✓$($cnt['✓']) ✗$($cnt['✗']) ─$($cnt['─']) ⏳$($cnt['⏳']) ⚠$($cnt['⚠'])$note")
+    [System.IO.File]::WriteAllText((Join-Path $dir '任务清单-总览.md'), ($ov -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+
+    # ---- 写 10 张流程清单 ----
+    foreach ($fl in $script:FlowChecklists) {
+        $flowName = $fl.File -replace '^任务清单-', '' -replace '\.md$', ''
+        $lines = New-Object System.Collections.Generic.List[string]
+        [void]$lines.Add("# 任务清单-$flowName")
+        [void]$lines.Add('')
+        [void]$lines.Add("- 验收批次：$ChecklistBatch")
+        [void]$lines.Add("- 被测服务器：$MachineName")
+        [void]$lines.Add("- 开始时间：$now")
+        [void]$lines.Add('')
+        [void]$lines.Add($statusLegend)
+        [void]$lines.Add('')
+        [void]$lines.Add('| 环节 | 要做什么 | 状态 | 结果 | 产物 |')
+        [void]$lines.Add('|------|---------|------|------|------|')
+        foreach ($st in $fl.Steps) {
+            [void]$lines.Add("| $($st.Key) | $($st.Desc) | ─ 等待执行 |  | 无 |")
+        }
+        [System.IO.File]::WriteAllText((Join-Path $dir $fl.File), ($lines -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+    }
+    return $dir
+}
+
+# 更新流程清单行（按环节名定位，UTF-8）；文件不存在静默返回（幂等）。
+# 状态/结果/产物三列整体覆写；状态非法值 → throw。
+function Update-TaskChecklist {
+    param(
+        [string]$ChecklistPath,
+        [string]$Key,
+        [string]$Status,
+        [string]$Result,
+        [string]$Product
+    )
+    if (-not (Test-Path -LiteralPath $ChecklistPath)) { return }
+    [void](Test-ChecklistStatus -Status $Status)
+    $content = [System.IO.File]::ReadAllText($ChecklistPath, [System.Text.Encoding]::UTF8)
+    $lines = @($content -split "`r?`n")
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\| ' -and $lines[$i] -notmatch '^\|-') {
+            $cols = $lines[$i] -split "\|"
+            # cols: ['', ' 环节 ', ' 要做什么 ', ' 状态 ', ' 结果 ', ' 产物 ', '']（流程清单无 # 列）
+            if ($cols.Count -ge 6 -and $cols[1].Trim() -eq $Key) {
+                $cols[3] = " $Status "
+                $cols[4] = " $Result "
+                $cols[5] = " $Product "
+                $lines[$i] = $cols -join "|"
+                break
+            }
+        }
+    }
+    [System.IO.File]::WriteAllText($ChecklistPath, ($lines -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# 更新总览行（按测试项编号定位，UTF-8）；文件不存在静默返回（幂等）。
+# 状态/结果摘要/原因三列整体覆写；状态非法值 → throw。
+function Update-OverviewRow {
+    param(
+        [string]$OverviewPath,
+        [int]$ItemNo,
+        [string]$Status,
+        [string]$Result,
+        [string]$Reason
+    )
+    if (-not (Test-Path -LiteralPath $OverviewPath)) { return }
+    [void](Test-ChecklistStatus -Status $Status)
+    $content = [System.IO.File]::ReadAllText($OverviewPath, [System.Text.Encoding]::UTF8)
+    $lines = @($content -split "`r?`n")
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match "^\| $ItemNo \|") {
+            $cols = $lines[$i] -split "\|"
+            # cols: ['', ' # ', ' 测试项 ', ' 状态 ', ' 结果摘要 ', ' 原因 ', ' 关联流程清单 ', '']
+            if ($cols.Count -ge 7) {
+                $cols[3] = " $Status "
+                $cols[4] = " $Result "
+                $cols[5] = " $Reason "
+                $lines[$i] = $cols -join "|"
+                break
+            }
+        }
+    }
+    [System.IO.File]::WriteAllText($OverviewPath, ($lines -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# 判断清单表格行是否"有实际状态"：状态列非空白且非 ─ 开头（⚠/✓/✗/⏳ 均算有状态）。
+function Test-ChecklistRowHasState {
+    param([string]$Line)
+    $cols = $Line -split "\|"
+    if ($cols.Count -lt 4) { return $false }
+    $st = $cols[3].Trim()
+    return ($st -ne '' -and $st -notlike '─*')
+}
+
+# 重算总览底部"总结论"行：按文件当前数据行状态列符号计数 ✓/✗/─/⏳/⚠，
+# 保留原行"（备注…）"后缀（若匹配）；无总结论行则追加。UTF-8 无 BOM 写回。
+function Update-ChecklistSummaryLine {
+    param([string]$OverviewPath)
+    if (-not (Test-Path -LiteralPath $OverviewPath)) { return }
+    $content = [System.IO.File]::ReadAllText($OverviewPath, [System.Text.Encoding]::UTF8)
+    $lines = @($content -split "`r?`n")
+    $cnt = @{ '✓' = 0; '✗' = 0; '─' = 0; '⏳' = 0; '⚠' = 0 }
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match "^\| \d+ \|") {
+            $cols = $lines[$i] -split "\|"
+            if ($cols.Count -ge 4) {
+                $st = $cols[3].Trim()
+                if ($st.Length -gt 0) {
+                    $sym = $st.Substring(0, 1)
+                    if ($cnt.ContainsKey($sym)) { $cnt[$sym]++ }
+                }
+            }
+        }
+    }
+    $summaryIdx = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^总结论: ') { $summaryIdx = $i; break }
+    }
+    $note = ''
+    if ($summaryIdx -ge 0) {
+        $mm = [regex]::Match($lines[$summaryIdx], '^总结论: ✓\d+ ✗\d+ ─\d+ ⏳\d+ ⚠\d+(.*)$')
+        if ($mm.Success) { $note = $mm.Groups[1].Value }
+        $lines[$summaryIdx] = "总结论: ✓$($cnt['✓']) ✗$($cnt['✗']) ─$($cnt['─']) ⏳$($cnt['⏳']) ⚠$($cnt['⚠'])$note"
+    } else {
+        $lines += "总结论: ✓$($cnt['✓']) ✗$($cnt['✗']) ─$($cnt['─']) ⏳$($cnt['⏳']) ⚠$($cnt['⚠'])"
+    }
+    [System.IO.File]::WriteAllText($OverviewPath, ($lines -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# 服务器清单并入编排机：流程清单（建档/Prime95 等服务器独有）不存在才复制；
+# 共享清单（总览/混插）逐行取有状态方——服务器有状态→服务器行；服务器 ─ 且编排机有状态→编排机行；
+# 两边均 ─ / 两边均有状态 → 服务器行；服务器没有该行 → 保留编排机行。
+# 总览合并完成后重算底部"总结论"计数行。返回编排机清单目录。
+function Merge-TaskChecklists {
+    param(
+        [string]$ServerChecklistDir,
+        [string]$OrchestratorChecklistDir,
+        [string]$MachineName
+    )
+    if (-not (Test-Path -LiteralPath $OrchestratorChecklistDir)) {
+        New-Item -ItemType Directory -Path $OrchestratorChecklistDir -Force | Out-Null
+    }
+    if (-not (Test-Path -LiteralPath $ServerChecklistDir)) { return $OrchestratorChecklistDir }
+
+    $sharedNames = @('任务清单-总览.md', '任务清单-混插.md')
+
+    # 1) 流程清单：不存在才复制（服务器独有文件带入）
+    foreach ($f in @(Get-ChildItem -LiteralPath $ServerChecklistDir -Filter '任务清单-*.md' -File -ErrorAction SilentlyContinue)) {
+        if ($f.Name -in $sharedNames) { continue }
+        $dest = Join-Path $OrchestratorChecklistDir $f.Name
+        if (-not (Test-Path -LiteralPath $dest)) {
+            Copy-Item -LiteralPath $f.FullName -Destination $dest -Force
+        }
+    }
+
+    # 2) 共享清单（总览/混插）：逐行取有状态方
+    foreach ($name in $sharedNames) {
+        $serverFile = Join-Path $ServerChecklistDir $name
+        if (-not (Test-Path -LiteralPath $serverFile)) { continue }
+        $orchFile = Join-Path $OrchestratorChecklistDir $name
+        if (-not (Test-Path -LiteralPath $orchFile)) {
+            Copy-Item -LiteralPath $serverFile -Destination $orchFile -Force
+            continue
+        }
+        $isOverview = ($name -match '总览')
+        $sLines = @(([System.IO.File]::ReadAllText($serverFile, [System.Text.Encoding]::UTF8)) -split "`r?`n")
+        $oLines = @(([System.IO.File]::ReadAllText($orchFile, [System.Text.Encoding]::UTF8)) -split "`r?`n")
+
+        # 服务器行表（总览按 ItemNo 行、混插按环节行）
+        $sRows = @{}
+        foreach ($line in $sLines) {
+            if ($line -match '^\| ' -and $line -notmatch '^\|-') {
+                if ($isOverview -and $line -notmatch '^\| \d+ \|') { continue }
+                $cols = $line -split "\|"
+                if ($cols.Count -lt 4) { continue }
+                $key = $cols[1].Trim()
+                if ($key -ne '') { $sRows[$key] = $line }
+            }
+        }
+
+        # 逐行合并 + 记录编排机行序/末行位置
+        $merged = @{}
+        $oOrder = @()
+        $oRowKeys = @{}
+        $lastRowIdx = -1
+        for ($i = 0; $i -lt $oLines.Count; $i++) {
+            $line = $oLines[$i]
+            if ($line -match '^\| ' -and $line -notmatch '^\|-') {
+                if ($isOverview -and $line -notmatch '^\| \d+ \|') { continue }
+                $cols = $line -split "\|"
+                if ($cols.Count -lt 4) { continue }
+                $key = $cols[1].Trim()
+                if ($key -eq '') { continue }
+                $lastRowIdx = $i
+                $oOrder += $key
+                $oRowKeys[$key] = $true
+                if ($sRows.ContainsKey($key)) {
+                    $sHas = Test-ChecklistRowHasState -Line $sRows[$key]
+                    $oHas = Test-ChecklistRowHasState -Line $line
+                    if ($sHas -or -not $oHas) { $merged[$key] = $sRows[$key] } else { $merged[$key] = $line }
+                } else {
+                    $merged[$key] = $line
+                }
+            }
+        }
+
+        # 重建编排机文件：非行行原样保留；行按编排机顺序输出合并行；服务器独有行追加在表格末尾
+        $out = New-Object System.Collections.Generic.List[string]
+        $emitted = @{}
+        for ($i = 0; $i -lt $oLines.Count; $i++) {
+            $line = $oLines[$i]
+            $isRow = $false
+            $key = ''
+            if ($line -match '^\| ' -and $line -notmatch '^\|-') {
+                if (-not ($isOverview -and $line -notmatch '^\| \d+ \|')) {
+                    $cols = $line -split "\|"
+                    if ($cols.Count -ge 4 -and $cols[1].Trim() -ne '') {
+                        $isRow = $true; $key = $cols[1].Trim()
+                    }
+                }
+            }
+            if ($isRow) {
+                if (-not $emitted.ContainsKey($key)) {
+                    [void]$out.Add($merged[$key])
+                    $emitted[$key] = $true
+                }
+                if ($i -eq $lastRowIdx) {
+                    foreach ($sk in $sRows.Keys) {
+                        if (-not $emitted.ContainsKey($sk)) {
+                            [void]$out.Add($sRows[$sk]); $emitted[$sk] = $true
+                        }
+                    }
+                }
+            } else {
+                [void]$out.Add($line)
+            }
+        }
+        [System.IO.File]::WriteAllText($orchFile, ($out -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+    }
+
+    # 3) 重算总览"总结论"行：合并后行状态可能变化（如服务器 ✓ 行并入），
+    #    计数须按合并后实际 17 行状态重算（覆盖"编排机总览缺失→复制服务器文件"分支）
+    $ovFinal = Join-Path $OrchestratorChecklistDir '任务清单-总览.md'
+    if (Test-Path -LiteralPath $ovFinal) { Update-ChecklistSummaryLine -OverviewPath $ovFinal }
+
+    return $OrchestratorChecklistDir
 }
 
 # 指令记录（cmdlog）：把本项目每次脚本调用记入 <包根>\results\cmdlog\commands-YYYY-MM-DD.csv。
