@@ -1358,6 +1358,8 @@ function Update-OverviewRow {
         }
     }
     [System.IO.File]::WriteAllText($OverviewPath, ($lines -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+    # 行状态变化后立即重算底部"总结论"行（幂等、保留备注后缀），使单机行更新后计数即时正确
+    Update-ChecklistSummaryLine -OverviewPath $OverviewPath
 }
 
 # 判断清单表格行是否"有实际状态"：状态列非空白且非 ─ 开头（⚠/✓/✗/⏳ 均算有状态）。
@@ -1402,6 +1404,56 @@ function Update-ChecklistSummaryLine {
         $lines += "总结论: ✓$($cnt['✓']) ✗$($cnt['✗']) ─$($cnt['─']) ⏳$($cnt['⏳']) ⚠$($cnt['⚠'])"
     }
     [System.IO.File]::WriteAllText($OverviewPath, ($lines -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# ORT 分支任务进度追踪挂点：更新 任务清单-ORT.md（72h 满载 / 全程测温 / 口径B结论）
+# + 总览第 5 项（Status/Result 同口径 B）。清单缺失自动建；参数取自 ORT 分支在内存
+# 变量（summary/verdict/tempInfo），调用方须以 try/catch 隔离（失败不影响 ORT 主流程）。
+function Update-OrTChecklist {
+    param(
+        [string]$ChecklistBatch,
+        [string]$ResultsDir,
+        [string]$BatchName = '',          # 产物文件名用（缺省 = ChecklistBatch）
+        [object]$Summary,
+        [object]$Verdict,
+        [double]$ActualMinutes,
+        [int]$TargetMinutes,
+        [object]$TempInfo,                # MaxTempC / TempSamples
+        [double]$TempLimitC
+    )
+    if ($BatchName -eq '') { $BatchName = $ChecklistBatch }
+    $clDir = Join-Path $ResultsDir $ChecklistBatch
+    if (-not (Test-Path -LiteralPath $clDir)) { $clDir = New-TaskChecklist -ChecklistBatch $ChecklistBatch -ResultsDir $ResultsDir }
+    $ortFlowPath = Join-Path $clDir '任务清单-ORT.md'
+    $overviewPath = Join-Path $clDir '任务清单-总览.md'
+    $tInfo = if ($null -ne $TempInfo) { $TempInfo } else { [PSCustomObject]@{ MaxTempC = [double]-1; TempSamples = 0 } }
+    $maxTemp = [double]$tInfo.MaxTempC
+    $tempSamples = [int]$tInfo.TempSamples
+
+    # 72h 满载：按 ORT 报告 Status（PASS→✓ / FAIL→✗），Result=实际时长/Passes/Errors/EccErrors
+    $loadStatus = if ($Verdict.Status -eq 'PASS') { '✓ 做成' } else { '✗ 没做成' }
+    $loadResult = "实际 $ActualMinutes min（目标 $TargetMinutes min）；Passes=$($Summary.PassesCompleted) Errors=$($Summary.Errors) EccErrors=$($Summary.EccErrors)"
+    Update-TaskChecklist -ChecklistPath $ortFlowPath -Key '72h 满载' -Status $loadStatus -Result $loadResult -Product "$BatchName-ort-report.csv"
+
+    # 全程测温：有温度数据且不超阈值 → ✓；判据未启用 → ⚠；数据缺失/超温 → ✗
+    $tempStatus = ''; $tempResult = ''
+    if ($TempLimitC -le 0) {
+        $tempStatus = '⚠ 无法测试'; $tempResult = '温度判据未启用（-TempLimitC 0）'
+    } elseif ($tempSamples -le 0) {
+        $tempStatus = '✗ 没做成'; $tempResult = '温度数据缺失（TempSamples=0，无采样）'
+    } elseif ($maxTemp -gt $TempLimitC) {
+        $tempStatus = '✗ 没做成'; $tempResult = "超温：最高 ${maxTemp}°C 超过上限 ${TempLimitC}°C"
+    } else {
+        $tempStatus = '✓ 做成'; $tempResult = "最高温 ${maxTemp}°C ≤ 上限 ${TempLimitC}°C（${tempSamples} 样本）"
+    }
+    Update-TaskChecklist -ChecklistPath $ortFlowPath -Key '全程测温' -Status $tempStatus -Result $tempResult -Product "$BatchName-temp.csv"
+
+    # 口径B结论：口径 B 判据（时长达标 + Errors=0 + EccErrors=0 + 温度达标）== ORT 报告 Status → ✓，否则 ✗
+    $bStatus = if ($Verdict.Status -eq 'PASS') { '✓ 做成' } else { '✗ 没做成' }
+    Update-TaskChecklist -ChecklistPath $ortFlowPath -Key '口径B结论' -Status $bStatus -Result $Verdict.Conclusion -Product "$BatchName-ort-report.csv"
+
+    # 总览第 5 项：Status/Result 同口径 B
+    Update-OverviewRow -OverviewPath $overviewPath -ItemNo 5 -Status $bStatus -Result $Verdict.Conclusion
 }
 
 # 服务器清单并入编排机：流程清单（建档/Prime95 等服务器独有）不存在才复制；
