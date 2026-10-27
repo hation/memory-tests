@@ -1,5 +1,30 @@
 ﻿. "$PSScriptRoot\..\scripts\lib_common.ps1"
 function Assert($cond, $msg) { if (-not $cond) { throw "ASSERT FAIL: $msg" } }
+# 清单表格解析辅助（黑盒读文件，UTF-8；供 PART5 校验 ORT 清单/总览更新）
+function Get-OvRows([string]$Path) {
+    $rows = @()
+    $content = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+    foreach ($line in ($content -split "`r?`n")) {
+        if ($line -match "^\| \d+ \|") {
+            $cols = $line -split "\|"
+            $rows += [PSCustomObject]@{ Item = $cols[1].Trim(); Status = $cols[3].Trim(); Result = $cols[4].Trim() }
+        }
+    }
+    return $rows
+}
+function Get-FlowRows([string]$Path) {
+    $rows = @()
+    $content = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+    foreach ($line in ($content -split "`r?`n")) {
+        if ($line -match "^\| " -and $line -notmatch "^\|-") {
+            $cols = $line -split "\|"
+            if ($cols.Count -ge 6 -and $cols[1].Trim() -ne '环节') {
+                $rows += [PSCustomObject]@{ Key = $cols[1].Trim(); Status = $cols[3].Trim(); Result = $cols[4].Trim(); Product = $cols[5].Trim() }
+            }
+        }
+    }
+    return $rows
+}
 # PART1: Get-OrTVerdict 判定场景（按实施计划 Task 1 Step 1）
 # PASS：足时长(4325≥4320)+全零+单次start+无gap+未停滞+温度正常
 $v = Get-OrTVerdict -ActualMinutes 4325 -TargetMinutes 4320 -Errors 0 -EccErrors 0 `
@@ -106,4 +131,66 @@ Assert ($tempInfo.TempSamples -eq 4) "temp sampling rows (2 iterations x 2 senso
 Assert ($tempInfo.MaxTempC -eq 71.5) "temp sampling max"
 Remove-Item -LiteralPath $tempCsv -Force
 Remove-Item -LiteralPath $fakeLib -Force
+
+# PART5: ORT 分支清单挂点（Update-OrTChecklist）仿真——参考 Task 3 报告仿真法：
+# New 清单 → 构造 ORT 报告（Export-OrTReport 假数据）→ 调挂点 → 断言 任务清单-ORT.md 三环节
+# 与总览第 5 项更新（PASS 场景；清单缺失自动建用 FAIL 场景验证）
+$tmpDir5 = Join-Path $env:TEMP ("ort-cl-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $tmpDir5 -Force | Out-Null
+try {
+    # ---- PASS 场景：时长达标 + 无错误 + 温度正常 ----
+    $clBatchP = "ort-cl-pass"
+    $dirP = New-TaskChecklist -ChecklistBatch $clBatchP -MachineName "srv01" -ResultsDir $tmpDir5
+    $sumP = [PSCustomObject]@{ PassesCompleted = 36; Errors = 0; EccErrors = 0; FinalStatus = 'PASS' }
+    $verdictP = [PSCustomObject]@{ Status = 'PASS'; Conclusion = '老化通过：4320 分钟 ≥ 目标 4320 分钟，Errors=0，ECC=0，无中断，最高温 72°C ≤ 85°C' }
+    $tempP = [PSCustomObject]@{ MaxTempC = 72.0; TempSamples = 72 }
+    Update-OrTChecklist -ChecklistBatch $clBatchP -ResultsDir $tmpDir5 -BatchName 'ort-cl-pass' `
+        -Summary $sumP -Verdict $verdictP -ActualMinutes 4320 -TargetMinutes 4320 -TempInfo $tempP -TempLimitC 85
+    $ortP = @(Get-FlowRows (Join-Path $dirP "任务清单-ORT.md"))
+    $p72 = $ortP | Where-Object { $_.Key -eq '72h 满载' }
+    Assert ($p72.Status -eq '✓ 做成' -and $p72.Result -match '实际 4320 min' -and $p72.Result -match 'Errors=0') "72h 满载 ✓（PASS 场景）"
+    $pT = $ortP | Where-Object { $_.Key -eq '全程测温' }
+    Assert ($pT.Status -eq '✓ 做成' -and $pT.Result -match '72' -and $pT.Product -eq 'ort-cl-pass-temp.csv') "全程测温 ✓（温度达标）"
+    $pB = $ortP | Where-Object { $_.Key -eq '口径B结论' }
+    Assert ($pB.Status -eq '✓ 做成' -and $pB.Result -match '老化通过') "口径B结论 ✓"
+    $ovP = @(Get-OvRows (Join-Path $dirP "任务清单-总览.md"))
+    $r5P = $ovP | Where-Object { $_.Item -eq '5' }
+    Assert ($r5P.Status -eq '✓ 做成' -and $r5P.Result -match '老化通过') "总览第 5 项同口径 B ✓"
+
+    # ---- FAIL 场景（清单缺失自动建）：时长不足 + 超温 ----
+    $clBatchF = "ort-cl-fail"
+    $sumF = [PSCustomObject]@{ PassesCompleted = 30; Errors = 3; EccErrors = 1; FinalStatus = 'FAIL' }
+    $verdictF = [PSCustomObject]@{ Status = 'FAIL'; Conclusion = '时长不足(实际 3600 min / 目标 4320 min)' }
+    $tempF = [PSCustomObject]@{ MaxTempC = 88.0; TempSamples = 60 }
+    Update-OrTChecklist -ChecklistBatch $clBatchF -ResultsDir $tmpDir5 -BatchName 'ort-cl-fail' `
+        -Summary $sumF -Verdict $verdictF -ActualMinutes 3600 -TargetMinutes 4320 -TempInfo $tempF -TempLimitC 85
+    $dirF = Join-Path $tmpDir5 $clBatchF
+    Assert (Test-Path (Join-Path $dirF "任务清单-ORT.md")) "FAIL 场景清单缺失自动建"
+    $ortF = @(Get-FlowRows (Join-Path $dirF "任务清单-ORT.md"))
+    $f72 = $ortF | Where-Object { $_.Key -eq '72h 满载' }
+    Assert ($f72.Status -eq '✗ 没做成' -and $f72.Result -match 'Errors=3 EccErrors=1') "72h 满载 ✗（FAIL 场景，含 Errors/EccErrors）"
+    $fT = $ortF | Where-Object { $_.Key -eq '全程测温' }
+    Assert ($fT.Status -eq '✗ 没做成' -and $fT.Result -match '超温') "全程测温 ✗（超温）"
+    $fB = $ortF | Where-Object { $_.Key -eq '口径B结论' }
+    Assert ($fB.Status -eq '✗ 没做成' -and $fB.Result -match '时长不足') "口径B结论 ✗"
+    $ovF = @(Get-OvRows (Join-Path $dirF "任务清单-总览.md"))
+    $r5F = $ovF | Where-Object { $_.Item -eq '5' }
+    Assert ($r5F.Status -eq '✗ 没做成') "总览第 5 项同口径 B ✗"
+
+    # ---- 温度判据未启用（-TempLimitC 0，Serial 无 BMC）→ 全程测温 ⚠ ----
+    $clBatchN = "ort-cl-nolimit"
+    $sumN = [PSCustomObject]@{ PassesCompleted = 36; Errors = 0; EccErrors = 0; FinalStatus = 'PASS' }
+    $verdictN = [PSCustomObject]@{ Status = 'PASS'; Conclusion = '老化通过：4320 分钟 ≥ 目标 4320 分钟，Errors=0，ECC=0，无中断，温度判据未启用' }
+    $tempN = [PSCustomObject]@{ MaxTempC = [double]-1; TempSamples = 0 }
+    Update-OrTChecklist -ChecklistBatch $clBatchN -ResultsDir $tmpDir5 -BatchName 'ort-cl-nolimit' `
+        -Summary $sumN -Verdict $verdictN -ActualMinutes 4320 -TargetMinutes 4320 -TempInfo $tempN -TempLimitC 0
+    $dirN = Join-Path $tmpDir5 $clBatchN
+    $ortN = @(Get-FlowRows (Join-Path $dirN "任务清单-ORT.md"))
+    $nT = $ortN | Where-Object { $_.Key -eq '全程测温' }
+    Assert ($nT.Status -eq '⚠ 无法测试' -and $nT.Result -match '未启用') "全程测温 ⚠（判据未启用）"
+    $nB = $ortN | Where-Object { $_.Key -eq '口径B结论' }
+    Assert ($nB.Status -eq '✓ 做成') "口径B结论 ✓（判据关闭仍按时长+错误判）"
+} finally {
+    Remove-Item -LiteralPath $tmpDir5 -Recurse -Force
+}
 Write-Host "test-ort: ALL PASS"

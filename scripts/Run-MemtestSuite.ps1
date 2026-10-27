@@ -540,6 +540,15 @@ if ($ortMode) {
         -MaxTempC $tempInfo.MaxTempC -TempSamples $tempInfo.TempSamples -Stalled $cap.Stalled -GapLimitMin $OrtMaxGapMin `
         -ReportDir $reportDir -LogPath $LogPath
     $ortExitCode = if ($verdict.Status -eq 'FAIL') { 2 } else { 0 }
+    # ---- 任务进度追踪（ORT 分支挂点：副作用；清单缺失自动建；失败不影响 ORT 主流程） ----
+    try {
+        $clBatch = if ($ChecklistBatch) { $ChecklistBatch } else { $BatchName }
+        Update-OrTChecklist -ChecklistBatch $clBatch -ResultsDir $LogPath -BatchName $BatchName `
+            -Summary $summary -Verdict $verdict -ActualMinutes $actualMin -TargetMinutes $MaxMinutes `
+            -TempInfo $tempInfo -TempLimitC $TempLimitC
+    } catch {
+        Write-Warning "任务清单更新失败（不影响 ORT 结果）: $($_.Exception.Message)"
+    }
     Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result ("ORT " + $verdict.Status) -ExitCode $ortExitCode -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit $ortExitCode   # ORT 分支到此结束（不进入常规 per-slot 报告与 RestartLoop）
 }

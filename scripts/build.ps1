@@ -194,13 +194,20 @@ $docsList = @(
     '12-离线部署与SOL测试手册.md',
     '13-服务器信息识别指南.md',
     '14-术语解释.md',
-    '15-BMC排查方案.md'
+    '15-BMC排查方案.md',
+    '19-测试项执行清单.md',
+    '20-纯命令行压测手册.md'
 )
 $keyFiles = @(
     (Join-Path $KitDir 'scripts\lib_common.ps1'),
     (Join-Path $KitDir 'scripts\Identify-Memory.ps1'),
     (Join-Path $KitDir 'scripts\Run-BatchScheduler.ps1'),
-    (Join-Path $KitDir 'scripts\Run-MemtestSuite.ps1')
+    (Join-Path $KitDir 'scripts\Run-MemtestSuite.ps1'),
+    (Join-Path $KitDir 'scripts\New-TaskChecklist.ps1'),
+    (Join-Path $KitDir 'scripts\Update-TaskChecklist.ps1'),
+    (Join-Path $KitDir 'scripts\Run-Prime95Stress.ps1'),
+    (Join-Path $KitDir 'scripts\Export-ServerResults.ps1'),
+    (Join-Path $KitDir 'scripts\Import-ServerResults.ps1')
 )
 foreach ($doc in $docsList) {
     $keyFiles += (Join-Path $KitDir "docs\$doc")

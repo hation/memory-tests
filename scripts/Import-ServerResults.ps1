@@ -123,17 +123,34 @@ try {
     # 清单位于解压目标 <批次>\ 子目录（服务器 results 导出包形态），或直接位于解压目标根
     # （清单裸打包形态，批次回退为机器名）。调 Merge-TaskChecklists 把服务器清单并入
     # 编排机 <ImportRoot>\<批次>\（不存在则建），写回编排机 results\<批次>\。
+    # 限定只合并【本次 zip 携带】的任务清单（ZipArchive 枚举条目名含 任务清单- 的批次目录），
+    # 而非整个累积解压目标——防 -Force 重导旧 zip 时把此前导入的旧批次清单回扫进合并，
+    # 用服务器旧状态覆盖编排机已推进行（Merge 逐行取"有状态方"且服务器优先）。
     try {
-        $checklistFiles = @(Get-ChildItem -LiteralPath $targetDir -Recurse -Filter '任务清单-*.md' -File -ErrorAction SilentlyContinue)
-        if ($checklistFiles.Count -gt 0) {
-            $targetFull = (Get-Item -LiteralPath $targetDir).FullName.TrimEnd('\')
-            foreach ($bd in @($checklistFiles | ForEach-Object { $_.Directory.FullName } | Select-Object -Unique)) {
-                $rel = if ($bd.StartsWith($targetFull + '\', [System.StringComparison]::OrdinalIgnoreCase)) { $bd.Substring($targetFull.Length).TrimStart('\') } else { $MachineName }
-                $batch = if ($rel -eq '') { $MachineName } else { $rel }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $za = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+        try {
+            $clDirs = @{}   # 批次目录 → 服务器清单目录（条目名去重）
+            foreach ($entry in $za.Entries) {
+                $n = ($entry.FullName -replace '/', '\').TrimStart('\')
+                if ($n -notmatch '任务清单-') { continue }
+                $parent = Split-Path $n -Parent
+                if ($parent -eq '' -or $parent -eq '.') {
+                    $clDirs[$MachineName] = $targetDir
+                } elseif ($parent -match '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+                    $clDirs[$parent] = Join-Path $targetDir $parent
+                }
+                # 其余（深层嵌套/含路径分隔符的异常条目）忽略，防路径穿越
+            }
+            foreach ($batch in $clDirs.Keys) {
+                $bd = $clDirs[$batch]
+                if (-not (Test-Path -LiteralPath $bd)) { continue }
                 $orchDir = Join-Path $ImportRoot $batch
                 Merge-TaskChecklists -ServerChecklistDir $bd -OrchestratorChecklistDir $orchDir -MachineName $MachineName | Out-Null
                 Write-Host "任务清单合并: $bd → $orchDir"
             }
+        } finally {
+            $za.Dispose()
         }
     } catch {
         Write-Host "警告: 任务清单合并失败（不影响导入结果）: $($_.Exception.Message)"

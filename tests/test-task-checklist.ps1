@@ -162,6 +162,9 @@ try {
     $ovA = @(Get-OverviewRows $ovPathA)
     $a5 = $ovA | Where-Object { $_.Item -eq '5' }
     Assert ($a5.Status -eq '⏳ 进行中' -and $a5.Result -eq '72h 跑 36h' -and $a5.Reason -eq '中途巡检') "总览行更新"
+    # I2 回归：Update-OverviewRow 写回后立即重算底部"总结论"行（单机行更新 → 计数即时正确）
+    $sum5 = Get-SummaryCounts $ovPathA
+    Assert ($sum5['⏳'] -eq 1 -and $sum5['─'] -eq 16 -and $sum5['✓'] -eq 0) "Update-OverviewRow 后总结论计数已刷新（期望 ⏳1 ─16，实际 ⏳$($sum5['⏳']) ─$($sum5['─']) ✓$($sum5['✓'])）"
     $a1 = $ovA | Where-Object { $_.Item -eq '1' }
     Assert ($a1.Status -match '^─') "总览其他行不变"
     Update-OverviewRow -OverviewPath (Join-Path $dirA "任务清单-总览-不存在.md") -ItemNo 1 -Status "✓" -Result "r" -Reason "w"

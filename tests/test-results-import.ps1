@@ -195,6 +195,49 @@ $hxPath = Join-Path $clDir "任务清单-混插.md"
 Assert ((Get-FlowRowVal $hxPath 'Memtest 混插组合' 3) -eq '✓ 做成' -and (Get-FlowRowVal $hxPath 'Memtest 混插组合' 4) -eq 'PASS') "混插 Memtest 行取服务器"
 Assert ((Get-FlowRowVal $hxPath 'Prime95 长压' 3) -eq '✓ 做成' -and (Get-FlowRowVal $hxPath 'Prime95 长压' 4) -eq 'P95 PASS') "混插 Prime95 行保留编排机"
 
+# ================ M3 回归：Import 只合并本次 zip 携带的任务清单 ================
+# 场景：编排机在导入 a1 后继续推进（项15 改为"编排机复核"）；随后导入的新 zip（zip4）
+#   只携带新批次 srv01-a2 清单（a1 清单不在导出范围）。旧实现扫描整个累积解压目标，
+#   会把此前导入的 a1 服务器旧状态（项15=服务器15）回扫进合并、覆盖编排机推进行；
+#   新实现按 zip 条目名限定本次 zip 携带的批次 → a1 不再被触碰。
+[System.IO.File]::WriteAllLines((Join-Path $clDir "任务清单-总览.md"), @(
+    "| 项 | 验收项 | 状态 | 结果 | 原因 | 流程 |",
+    "| --- | --- | --- | --- | --- | --- |",
+    "| 1 | SPD 信息校验 | ✓ 做成 | SPD 匹配 | | 建档 |",
+    "| 3 | 全地址读写覆盖(Memtest) | ✓ 做成 | 1轮全项 PASS | | Memtest |",
+    "| 15 | 多平台兼容 | ✓ 做成 | 编排机复核 | | 多平台 |"
+), $clUtf8)
+# 服务器新批次 a2 清单（zip4 唯一携带的清单批次）
+$clDir2 = Join-Path $res "srv01-a2"
+New-Item -ItemType Directory -Path $clDir2 -Force | Out-Null
+[System.IO.File]::WriteAllLines((Join-Path $clDir2 "任务清单-总览.md"), @(
+    "| 项 | 验收项 | 状态 | 结果 | 原因 | 流程 |",
+    "| --- | --- | --- | --- | --- | --- |",
+    "| 1 | SPD 信息校验 | ✓ 做成 | SPD 匹配 a2 | | 建档 |",
+    "| 3 | 全地址读写覆盖(Memtest) | ─ 等待执行 | | | Memtest |"
+), $clUtf8)
+[System.IO.File]::WriteAllLines((Join-Path $clDir2 "任务清单-建档.md"), @(
+    "# 任务清单-建档",
+    "| 环节 | 内容 | 状态 | 结果 | 产物 |",
+    "| --- | --- | --- | --- | --- |",
+    "| 识别条子 | SPD 识别 | ✓ 做成 | SN a2 | srv01-a2.csv |"
+), $clUtf8)
+# 按 Export 的 staging 打包形态构造 zip4（顶层为 srv01-a2\ 批次目录）
+$stage4 = Join-Path $tmpRoot "stage4"
+New-Item -ItemType Directory -Path $stage4 -Force | Out-Null
+Copy-Item $clDir2 $stage4 -Recurse -Force
+$zip4Name = "srv01-results-" + (Get-Date).AddDays(2).ToString("yyyyMMdd") + ".zip"
+$zip4Path = Join-Path $tmpU $zip4Name
+Compress-Archive -Path (Join-Path $stage4 '*') -DestinationPath $zip4Path -CompressionLevel Optimal -Force
+$z4 = [System.IO.Compression.ZipFile]::OpenRead($zip4Path)
+Assert (@($z4.Entries | Where-Object { $_.FullName -match '任务清单-' }).Count -gt 0) "zip4 携带 a2 清单条目"
+Assert (@($z4.Entries | Where-Object { $_.FullName -match 'srv01-a1' }).Count -eq 0) "zip4 不携带 a1 清单"
+$z4.Dispose()
+& (Join-Path $tmpKit "scripts\Import-ServerResults.ps1") -ZipPath $zip4Path -ImportRoot $res
+Assert ((Get-OvRowVal $ovPath '15' 3) -eq '✓ 做成' -and (Get-OvRowVal $ovPath '15' 4) -eq '编排机复核') "新 zip 不携带 a1 时 a1 保持编排机推进行（旧实现会回扫累积目标覆盖为服务器15）"
+Assert (Test-Path (Join-Path $res "srv01-a2\任务清单-总览.md")) "新批次 a2 清单归集合并写回编排机目录"
+Assert ((Get-OvRowVal (Join-Path $res "srv01-a2\任务清单-总览.md") '1' 3) -eq '✓ 做成' -and (Get-OvRowVal (Join-Path $res "srv01-a2\任务清单-总览.md") '1' 4) -eq 'SPD 匹配 a2') "a2 清单合并带服务器状态"
+
 # ---- 清理临时目录 ----
 Remove-Item -LiteralPath $tmpRoot -Recurse -Force
 Write-Host "test-results-import: ALL PASS"
