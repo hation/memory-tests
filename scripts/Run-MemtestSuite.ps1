@@ -658,13 +658,24 @@ try {
     if (-not (Test-Path -LiteralPath $clDir)) { $clDir = New-TaskChecklist -ChecklistBatch $clBatch -ResultsDir $LogPath }
     $overview = Join-Path $clDir '任务清单-总览.md'
     $mtStatus = if ($summary.FinalStatus -eq 'PASS') { '✓ 做成' } else { '✗ 没做成' }
-    # 档位名判定：-TestList 非空 → 快筛档位（1 轮快筛对应清单环节"快筛"），否则全项档位
-    $gearKey = if ($TestList) { if ($MaxPasses -eq 1) { '快筛' } else { "$MaxPasses轮快筛" } } else { "$MaxPasses轮全项" }
-    $gearName = if ($TestList) { if ($MaxPasses -eq 1) { '1轮快筛' } else { "$MaxPasses轮快筛" } } else { "$MaxPasses轮全项" }
+    # 档位名判定：-TestList 非空 → 快筛档位（1 轮快筛对应清单环节"快筛"），否则全项档位。
+    # 注意 ${MaxPasses} 花括号：PowerShell 5.1 会把 "$MaxPasses轮全项" 解析为变量 $MaxPasses轮全项（中文属合法标识符字符）→ 空串。
+    $gearKey = if ($TestList) { if ($MaxPasses -eq 1) { '快筛' } else { "${MaxPasses}轮快筛" } } else { "${MaxPasses}轮全项" }
+    $gearName = if ($TestList) { if ($MaxPasses -eq 1) { '1轮快筛' } else { "${MaxPasses}轮快筛" } } else { "${MaxPasses}轮全项" }
     $mtResult = "档位=$gearName；Passes=$($summary.PassesCompleted) Errors=$($summary.Errors)"
     $mtProduct = "$BatchName-report.csv"
     if ($Scenario -eq '标准') {
-        Update-TaskChecklist -ChecklistPath (Join-Path $clDir '任务清单-Memtest.md') -Key $gearKey -Status $mtStatus -Result $mtResult -Product $mtProduct
+        $mtFlowPath = Join-Path $clDir '任务清单-Memtest.md'
+        Update-TaskChecklist -ChecklistPath $mtFlowPath -Key $gearKey -Status $mtStatus -Result $mtResult -Product $mtProduct
+        # 档位键无对应清单行（如 -MaxPasses 0/3，帮助文本 0=不限 为合法取值）→ 提示，
+        # 避免"总览 ✓ 而 Memtest 流程清单全 ─"的误导；总览第 3 项仍按实际档位更新。
+        $gearRowHit = $false
+        if (Test-Path -LiteralPath $mtFlowPath) {
+            $gearRowHit = [System.IO.File]::ReadAllText($mtFlowPath, [System.Text.Encoding]::UTF8) -match ("(?m)^\| " + [regex]::Escape($gearKey) + " \|")
+        }
+        if (-not $gearRowHit) {
+            Write-Warning "档位 $gearName 无对应清单行（档位集：1/2/4 轮快筛/全项），本次仅更新总览"
+        }
         Update-OverviewRow -OverviewPath $overview -ItemNo 3 -Status $mtStatus -Result $mtResult
     } else {
         Update-TaskChecklist -ChecklistPath (Join-Path $clDir '任务清单-混插.md') -Key 'Memtest 混插组合' -Status $mtStatus -Result $mtResult -Product $mtProduct
