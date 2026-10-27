@@ -81,7 +81,9 @@ $scriptFiles = @(
     'Diag-Bmc.ps1',
     'New-MemtestSolIso.ps1',
     'Smoke-MemtestIso.ps1',
-    'Run-Prime95Stress.ps1'
+    'Run-Prime95Stress.ps1',
+    'Export-ServerResults.ps1',
+    'Import-ServerResults.ps1'
 )
 Sync-Dir -Src $scriptSrc -Dst $scriptDst -Exclude @('build.ps1')
 foreach ($f in $scriptFiles) {
