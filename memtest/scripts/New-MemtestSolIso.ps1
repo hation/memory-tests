@@ -178,11 +178,15 @@ if (-not (Test-Path -LiteralPath $Kernel))       { Fail "内核文件不存在: 
 $smokePassed = $false
 $smokeReason = ''
 if ($Smoke) {
-    # A1 前置校验：确认 -DefaultIndex 2（1轮快速筛选 预设）存在，缺失则提示改索引
+    # A1 前置校验：按 key 动态定位 1轮快筛 预设索引（预设重排后索引不再固定，禁止硬编码）
     try {
         $smokePresets = Get-MemtestPresets -Path $PresetsConf
-        if ($smokePresets.Presets.Count -lt 3) {
-            Fail "冒烟预设索引 2 不存在：当前 conf 仅 $($smokePresets.Presets.Count) 个预设（1轮快速筛选 应位于索引 2）。请调整 config\memtest-presets.conf 或改 -Smoke 的预设索引。"
+        $smokeIdx = -1
+        for ($i = 0; $i -lt $smokePresets.Presets.Count; $i++) {
+            if ($smokePresets.Presets[$i].Key -eq '1轮快筛') { $smokeIdx = $i; break }
+        }
+        if ($smokeIdx -lt 0) {
+            Fail "冒烟预设（1轮快筛）不存在：当前 conf 的预设 key 为 $($smokePresets.Presets.Key -join ', ')。请调整 config\memtest-presets.conf 或改 -Smoke 的预设 key。"
         }
     } catch {
         Fail "读取预设配置失败（-Smoke 前置校验）: $($_.Exception.Message)"
@@ -190,15 +194,15 @@ if ($Smoke) {
 
     $smokeIso = Join-Path $env:TEMP ("memtest-sol-smoke-" + [guid]::NewGuid().ToString("N") + ".iso")
     try {
-        # A1：用 -DefaultIndex 2 -TimeoutSeconds 3（对应 1轮快速筛选 预设）构建临时 ISO（不写正式 OutIso）
-        Write-Host "==> -Smoke：构建临时冒烟 ISO（预设索引 2，超时 3s）：$smokeIso"
+        # A1：用 -DefaultIndex <1轮快筛索引> -TimeoutSeconds 3 构建临时 ISO（不写正式 OutIso）
+        Write-Host "==> -Smoke：构建临时冒烟 ISO（预设 key=1轮快筛，索引 $smokeIdx，超时 3s）：$smokeIso"
         $subPs = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
         $subArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $MyInvocation.MyCommand.Definition,
                      '-GrubDir', $GrubDir, '-Kernel', $Kernel, '-PresetsConf', $PresetsConf,
-                     '-OutIso', $smokeIso, '-Python', $Python, '-DefaultIndex', '2', '-TimeoutSeconds', '3')
+                     '-OutIso', $smokeIso, '-Python', $Python, '-DefaultIndex', [string]$smokeIdx, '-TimeoutSeconds', '3')
         & $subPs @subArgs | Out-Host
         if ($LASTEXITCODE -ne 0) {
-            Fail "冒烟临时 ISO 构建失败（退出码 $LASTEXITCODE）。提示：-Smoke 用 -DefaultIndex 2 指向 1轮快速筛选 预设，若该预设缺失请调整 config\memtest-presets.conf 或改索引。"
+            Fail "冒烟临时 ISO 构建失败（退出码 $LASTEXITCODE）。提示：-Smoke 用 key=1轮快筛 的动态索引 $smokeIdx 指向 1轮快速筛选 预设，若该预设缺失请调整 config\memtest-presets.conf 或改 -Smoke 的预设 key。"
         }
 
         # A2：调 Smoke-MemtestIso.ps1（环境变量 MT_SMOKE_SCRIPT 可覆盖脚本路径，供测试注入 fake）
