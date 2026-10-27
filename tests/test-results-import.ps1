@@ -42,6 +42,17 @@ foreach ($n in @("master_manifest.csv", "srv01-a1.csv", "reports", "work", "asse
     Assert ($tops -contains $n) "zip 顶层含 $n"
 }
 
+# ---- 失败场景回归：默认 ResultsDir（<包根>\results）缺失 → 报"结果目录不存在"，不误报"无结果可导出" ----
+$tmpKit2 = Join-Path $tmpRoot "kit2"
+New-Item -ItemType Directory -Path (Join-Path $tmpKit2 "scripts") -Force | Out-Null
+foreach ($f in @("Export-ServerResults.ps1", "lib_common.ps1")) {
+    Copy-Item (Join-Path $src "scripts\$f") (Join-Path $tmpKit2 "scripts\$f") -Force
+}
+$out2 = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $tmpKit2 "scripts\Export-ServerResults.ps1") -MachineName srv01 2>&1 | Out-String
+Assert ($LASTEXITCODE -eq 1) "默认 ResultsDir 缺失 exit 1"
+Assert ($out2 -match "结果目录不存在") "默认 ResultsDir 缺失报'结果目录不存在'（实际输出: $out2）"
+Assert ($out2 -notmatch "无结果可导出") "不得误报'无结果可导出'（实际输出: $out2）"
+
 # ---- 清理临时目录 ----
 Remove-Item -LiteralPath $tmpRoot -Recurse -Force
 Write-Host "test-results-import (export): ALL PASS"

@@ -37,6 +37,18 @@ if ($OutDir -eq "") { $OutDir = Join-Path (Split-Path -Parent $PSScriptRoot) "re
 # 指令记录：本次调用入库（本脚本无敏感参数）
 $scriptStartTime = Get-Date
 
+# 校验 0：ResultsDir 必须存在（须在 Write-CmdLog Start 之前检查——
+#   Start 会自建 <包根>\results\cmdlog、连带建出 <包根>\results；
+#   若默认 ResultsDir 缺失时先 Start 再检查，存在性检查将失效，
+#   报错会变成"无结果可导出"而非"结果目录不存在"）
+if (-not (Test-Path -LiteralPath $ResultsDir)) {
+    Write-Host "错误: 结果目录不存在（$ResultsDir）"
+    # Start 尚未写：先补写 Start 再写 End，保持 cmdlog 的 Start/End 对
+    Write-CmdLog -Script 'Export-ServerResults' -CmdArgs $MyInvocation.Line -State Start
+    Write-CmdLog -Script 'Export-ServerResults' -State End -Result 'FAIL: ResultsDir 不存在' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+    exit 1
+}
+
 # 预检 6 项（cmdlog 源状态须在 Start 之前记录：Write-CmdLog Start 会自建
 #   <包根>\results\cmdlog\commands-<今日>.csv，若以复制结果判定会把"无结果"
 #   误判为有内容——cmdlog 用 Start 前的源状态，其余 5 项 Start 前后不受影响）
@@ -44,12 +56,7 @@ $hasCmdlogSrc = Test-Path -LiteralPath (Join-Path $ResultsDir 'cmdlog')
 
 Write-CmdLog -Script 'Export-ServerResults' -CmdArgs $MyInvocation.Line -State Start
 
-# 校验：ResultsDir 必须存在；OutDir 不存在则创建
-if (-not (Test-Path -LiteralPath $ResultsDir)) {
-    Write-Host "错误: 结果目录不存在（$ResultsDir）"
-    Write-CmdLog -Script 'Export-ServerResults' -State End -Result 'FAIL: ResultsDir 不存在' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
-    exit 1
-}
+# 校验 1：OutDir 不存在则创建
 if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
 
 # 6 项全缺判定（依据 Start 前的源状态）
