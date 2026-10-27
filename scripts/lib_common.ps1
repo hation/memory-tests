@@ -961,7 +961,7 @@ function Get-Prime95Verdict {
         [int]$TargetMinutes,
         [int]$ErrorCount = 0,
         [bool]$ExitedEarly = $false,
-        [bool]$NoLogFile = $false
+        [bool]$CpuInactive = $false
     )
 
     $status = 'PASS'
@@ -978,9 +978,9 @@ function Get-Prime95Verdict {
         $status = 'FAIL'
         $reason = "检测到错误(ErrorCount=${ErrorCount})"
     }
-    elseif ($NoLogFile) {
+    elseif ($CpuInactive) {
         $status = 'FAIL'
-        $reason = '未生成 results.txt(Prime95 未实际运行或时长过短未完成首轮)'
+        $reason = 'CPU 无活动(疑似卡在 Torture 对话框或未开始)'
     }
     if ($status -eq 'PASS') {
         $conclusion = "Prime95 长压通过：{0} 分钟 ≥ 目标 {1} 分钟，0 错误" -f $ActualMinutes, $TargetMinutes
