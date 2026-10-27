@@ -3,7 +3,8 @@
 # 服务器侧结果一键打包（结果归集：服务器 → 编排机，经 U盘搬运）
 #
 # 定位：把被测服务器 <包根>\results\ 里应归集的结果（建档 *.csv、
-#       master_manifest.csv、reports\、work\、assessment\、cmdlog\）打包成
+#       master_manifest.csv、reports\、work\、assessment\、cmdlog\、
+#       任务清单 results\<批次>\任务清单-*.md）打包成
 #       <机器名>-results-YYYYMMDD.zip（zip 顶层另含 _export-meta.txt 元信息），
 #       产物放 <包根>\results\export\，由编排机 Import-ServerResults.ps1 导入。
 #       排除 export\（导出产物自身，防递归）、raw\、imported\（编排机侧产物）。
@@ -75,7 +76,7 @@ $dateStr = Get-Date -Format "yyyyMMdd"
 $staging = Join-Path $OutDir "staging\$MachineName-$dateStr"
 $zipPath = Join-Path $OutDir "$MachineName-results-$dateStr.zip"
 
-# 主流程：staging 复制 6 项 → 写 meta → 压缩 → cmdlog End → exit 0
+# 主流程：staging 复制 6 项 + 任务清单 → 写 meta → 压缩 → cmdlog End → exit 0
 # 运行期异常由 catch 兜底补写 cmdlog End（FAIL）后 exit 1；staging 由 finally 保证失败也清理
 try {
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
@@ -95,6 +96,18 @@ try {
         if (Test-Path -LiteralPath $srcDir) {
             Copy-Item -LiteralPath $srcDir -Destination $staging -Recurse -ErrorAction SilentlyContinue
         }
+    }
+
+    # 4) 任务清单（results\<批次>\任务清单-*.md）：所在批次目录整个复制进 staging，
+    #    顶层保持 <批次>\ 结构（zip 顶层出现批次目录）。排除 export\ raw\ imported\
+    #    子树——与既有排除逻辑一致，不误伤 results\<批次>\ 下的清单。
+    $checklistDirs = @(
+        Get-ChildItem -LiteralPath $ResultsDir -Recurse -Filter '任务清单-*.md' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '\\(export|raw|imported)(\\|$)' } |
+        Select-Object -ExpandProperty Directory -Unique
+    )
+    foreach ($cd in $checklistDirs) {
+        Copy-Item -LiteralPath $cd.FullName -Destination $staging -Recurse -ErrorAction SilentlyContinue
     }
 
     # _export-meta.txt（UTF8 无 BOM，随 zip 顶层带走）

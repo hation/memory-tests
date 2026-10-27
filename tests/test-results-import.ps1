@@ -4,6 +4,8 @@
 #   Write-CmdLog 自动落临时库 results\cmdlog（$PSScriptRoot 指向 kit\scripts），不污染真实库。
 # Task 1/2 覆盖：export（zip 生成 + 顶层 7 项 + 失败场景）与 import（导入结构 / import-log /
 #   防重复跳过 / -Force 重导 / 累积第二个 zip）。
+# Task 4 覆盖：export 打包任务清单（results\<批次>\ → zip 顶层批次目录）+ import 归集合并
+#   （Merge-TaskChecklists：服务器独有流程清单带入 / 总览逐行取有状态方 / 写回编排机目录）。
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File tests\test-results-import.ps1
 # ============================================================================
 $ErrorActionPreference = 'Stop'
@@ -94,6 +96,104 @@ Copy-Item $zip2[0].FullName (Join-Path $tmpU $zip2Name) -Force | Out-Null
 Assert ((Get-Content (Join-Path $imp "srv01-a1.csv")) -contains 'srv01-a1-v2') "同名覆盖为新内容"
 Assert (Test-Path (Join-Path $imp "srv01-a2.csv")) "新建档并入"
 Assert (Test-Path (Join-Path $imp "reports\p95.csv")) "旧批次独有文件保留"
+
+# ================ 任务清单打包 + 归集合并断言（Task 4） ================
+# ---- 构造服务器任务清单（批次 srv01-a1，置于 results\<批次>\；zip 应带批次目录） ----
+$clBatch = "srv01-a1"
+$clDir = Join-Path $res $clBatch
+New-Item -ItemType Directory -Path $clDir -Force | Out-Null
+$clUtf8 = New-Object System.Text.UTF8Encoding($false)
+# 服务器总览：项1 ✓（建档已做）、项3 ─（未跑 Memtest）、项15 ✓（服务器15）
+[System.IO.File]::WriteAllLines((Join-Path $clDir "任务清单-总览.md"), @(
+    "| 项 | 验收项 | 状态 | 结果 | 原因 | 流程 |",
+    "| --- | --- | --- | --- | --- | --- |",
+    "| 1 | SPD 信息校验 | ✓ 做成 | SPD 匹配 | | 建档 |",
+    "| 2 | 基础识别/容量频率 | ─ 等待执行 | | | 建档 |",
+    "| 3 | 全地址读写覆盖(Memtest) | ─ 等待执行 | | | Memtest |",
+    "| 15 | 多平台兼容 | ✓ 做成 | 服务器15 | | 多平台 |",
+    "| 16 | 多通道混插压力 | ─ 等待执行 | | | 混插 |",
+    "| 17 | 外观/焊点/电性复检 | ─ 等待执行 | | | 目检电性 |"
+), $clUtf8)
+# 服务器独有流程清单（建档）+ 共享混插清单
+[System.IO.File]::WriteAllLines((Join-Path $clDir "任务清单-建档.md"), @(
+    "# 任务清单-建档",
+    "| 环节 | 内容 | 状态 | 结果 | 产物 |",
+    "| --- | --- | --- | --- | --- |",
+    "| 识别条子 | SPD 识别 | ✓ 做成 | SN 已识别 | srv01-a1.csv |",
+    "| 生成清单 | 建批次清单 | ─ 等待执行 | | 无 |",
+    "| 比对 | 与数据库比对 | ─ 等待执行 | | 无 |"
+), $clUtf8)
+[System.IO.File]::WriteAllLines((Join-Path $clDir "任务清单-混插.md"), @(
+    "# 任务清单-混插",
+    "| 环节 | 内容 | 状态 | 结果 | 产物 |",
+    "| --- | --- | --- | --- | --- |",
+    "| Memtest 混插组合 | 多通道混插 Memtest | ✓ 做成 | PASS | mix-report.csv |",
+    "| Prime95 长压 | 混插 Prime95 | ─ 等待执行 | | 无 |"
+), $clUtf8)
+
+# ---- Export（第三次导出；zip 顶层含清单批次目录 srv01-a1\） ----
+& (Join-Path $tmpKit "scripts\Export-ServerResults.ps1") -MachineName srv01 -ResultsDir $res -OutDir (Join-Path $res "export")
+$zip3 = @(Get-ChildItem (Join-Path $res "export") -Filter "srv01-results-*.zip")
+Assert ($zip3.Count -eq 1) "第三次导出覆盖同名 zip"
+$z3 = [System.IO.Compression.ZipFile]::OpenRead($zip3[0].FullName)
+$tops3 = @($z3.Entries | ForEach-Object { $_.FullName.Split(@('/','\'))[0] })
+Assert ($tops3 -contains $clBatch) "zip 顶层含清单批次目录 $clBatch"
+Assert (@($z3.Entries | Where-Object { $_.FullName -match ([regex]::Escape($clBatch) + '\\任务清单-总览\.md') }).Count -eq 1) "zip 内含 $clBatch\任务清单-总览.md"
+$z3.Dispose()
+
+# ---- 编排机侧预置清单（模拟编排机已跑部分项：覆盖 $res\$clBatch\ 为编排机版本；zip 已带走服务器版本） ----
+[System.IO.File]::WriteAllLines((Join-Path $clDir "任务清单-总览.md"), @(
+    "| 项 | 验收项 | 状态 | 结果 | 原因 | 流程 |",
+    "| --- | --- | --- | --- | --- | --- |",
+    "| 1 | SPD 信息校验 | ─ 等待执行 | | | 建档 |",
+    "| 3 | 全地址读写覆盖(Memtest) | ✓ 做成 | 1轮全项 PASS | | Memtest |",
+    "| 15 | 多平台兼容 | ✓ 做成 | 编排机15 | | 多平台 |"
+), $clUtf8)
+[System.IO.File]::WriteAllLines((Join-Path $clDir "任务清单-混插.md"), @(
+    "# 任务清单-混插",
+    "| 环节 | 内容 | 状态 | 结果 | 产物 |",
+    "| --- | --- | --- | --- | --- |",
+    "| Memtest 混插组合 | 多通道混插 Memtest | ─ 等待执行 | | 无 |",
+    "| Prime95 长压 | 混插 Prime95 | ✓ 做成 | P95 PASS | p95-report.csv |"
+), $clUtf8)
+
+# ---- Import（zip3 改名"明日批次"防与今日 zip1 判重；导入触发清单归集合并） ----
+$zip3Name = $zip3[0].Name -replace '\d{8}', (Get-Date).AddDays(1).ToString("yyyyMMdd")
+Copy-Item $zip3[0].FullName (Join-Path $tmpU $zip3Name) -Force | Out-Null
+& (Join-Path $tmpKit "scripts\Import-ServerResults.ps1") -ZipPath (Join-Path $tmpU $zip3Name) -ImportRoot $res
+
+# ---- 断言合并结果（写回编排机 <ImportRoot>\<批次>\ == $res\srv01-a1） ----
+function Get-OvRowVal([string]$Path, [string]$ItemNo, [int]$Col) {
+    $content = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+    foreach ($line in ($content -split "`r?`n")) {
+        if ($line -match ("^\| " + $ItemNo + " \|")) {
+            $cols = $line -split "\|"
+            if ($cols.Count -gt $Col) { return $cols[$Col].Trim() }
+        }
+    }
+    return $null
+}
+function Get-FlowRowVal([string]$Path, [string]$Key, [int]$Col) {
+    $content = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+    foreach ($line in ($content -split "`r?`n")) {
+        if ($line -match '^\| ' -and $line -notmatch '^\|-') {
+            $cols = $line -split "\|"
+            if ($cols.Count -ge 5 -and $cols[1].Trim() -eq $Key) { return $cols[$Col].Trim() }
+        }
+    }
+    return $null
+}
+$ovPath = Join-Path $clDir "任务清单-总览.md"
+Assert (Test-Path $ovPath) "合并后总览写回编排机目录"
+Assert ((Get-OvRowVal $ovPath '1' 3) -eq '✓ 做成' -and (Get-OvRowVal $ovPath '1' 4) -eq 'SPD 匹配') "总览项1 取服务器 ✓（服务器有状态、编排机 ─）"
+Assert ((Get-OvRowVal $ovPath '3' 3) -eq '✓ 做成' -and (Get-OvRowVal $ovPath '3' 4) -eq '1轮全项 PASS') "总览项3 保留编排机 ✓（服务器 ─、编排机有状态）"
+Assert ((Get-OvRowVal $ovPath '15' 3) -eq '✓ 做成' -and (Get-OvRowVal $ovPath '15' 4) -eq '服务器15') "总览项15 取服务器 ✓（两边均有状态取服务器）"
+$jdPath = Join-Path $clDir "任务清单-建档.md"
+Assert (Test-Path $jdPath) "服务器独有流程清单（建档）带入编排机"
+Assert ((Get-FlowRowVal $jdPath '识别条子' 3) -eq '✓ 做成' -and (Get-FlowRowVal $jdPath '识别条子' 4) -eq 'SN 已识别') "建档清单带服务器状态/结果"
+$hxPath = Join-Path $clDir "任务清单-混插.md"
+Assert ((Get-FlowRowVal $hxPath 'Memtest 混插组合' 3) -eq '✓ 做成' -and (Get-FlowRowVal $hxPath 'Memtest 混插组合' 4) -eq 'PASS') "混插 Memtest 行取服务器"
+Assert ((Get-FlowRowVal $hxPath 'Prime95 长压' 3) -eq '✓ 做成' -and (Get-FlowRowVal $hxPath 'Prime95 长压' 4) -eq 'P95 PASS') "混插 Prime95 行保留编排机"
 
 # ---- 清理临时目录 ----
 Remove-Item -LiteralPath $tmpRoot -Recurse -Force
