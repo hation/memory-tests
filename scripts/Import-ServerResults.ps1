@@ -6,8 +6,9 @@
 #       <ImportRoot>\imported\<机器名>\。累积式：直接并入、不清理旧内容——
 #       同名文件被新导入覆盖，旧批次独有文件保留。防重复：imported\import-log.csv
 #       已含相同 ZipName 时默认跳过（不追加 log、exit 0）；-Force 允许重导（重新
-#       解压覆盖同名 + log 追加一行 Note=重导）。import-log.csv 字段：
-#       ImportTime,MachineName,ZipName,FileCount,SourceDir,Note；
+#       解压覆盖同名；Note 按是否已导入过判定：已导入记"重导"，首次导入记"首次导入"）。
+#       import-log.csv 字段：
+#       ImportTime,MachineName,ZipName,FileCount（本次导入的 zip 条目数）,SourceDir,Note；
 #       SourceDir 读 zip 内 _export-meta.txt 的 ServerResultsDir（meta 缺失留空）。
 #       机器名：显式 -MachineName 优先，否则从 zip 文件名正则
 #       ^(.+)-results-\d{8}\.zip$ 解析，解析失败报错 exit 1。
@@ -69,6 +70,14 @@ if ($MachineName -eq "") {
     }
 }
 
+# 机器名白名单校验：只允许字母/数字开头，后续字符限 [A-Za-z0-9._-]，
+# 拒绝 `..`、路径分隔符等值逃出 <ImportRoot>\imported\ 隔离目录（防路径穿越）
+if ($MachineName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+    Write-Host "错误: 机器名非法（$MachineName）"
+    Write-CmdLog -Script $scriptName -State End -Result 'FAIL: 机器名非法' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+    exit 1
+}
+
 # 主流程：判重 → Skip 或 解压 → 读 meta 填 SourceDir → 统计文件数 → 追加 import-log → End exit 0
 # 运行期异常由 catch 兜底补写 cmdlog End（FAIL）后 exit 1
 try {
@@ -89,8 +98,14 @@ try {
 
     # 累积式解压：并入 <ImportRoot>\imported\<机器名>\，不清理旧内容；同名文件覆盖
     New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+
+    # FileCount：本次导入的文件数 = zip 内条目数（解压前统计，避免累积目录计数失真）
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $fc = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    $fileCount = $fc.Entries.Count
+    $fc.Dispose()
+
     Expand-Archive -LiteralPath $ZipPath -DestinationPath $targetDir -Force
-    $fileCount = @(Get-ChildItem -LiteralPath $targetDir -Recurse -File).Count
 
     # SourceDir：读 zip 内 _export-meta.txt 的 ServerResultsDir（meta 缺失留空）
     $sourceDir = ""
@@ -101,14 +116,14 @@ try {
         }
     }
 
-    # import-log 追加一行（首次导入 / 重导，按是否 -Force 判定；追加不覆盖）
+    # import-log 追加一行（首次导入 / 重导，按是否已导入过该 ZipName 判定；追加不覆盖）
     $row = [PSCustomObject][ordered]@{
         ImportTime  = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         MachineName = $MachineName
         ZipName     = $zipName
         FileCount   = $fileCount
         SourceDir   = $sourceDir
-        Note        = if ($Force) { '重导' } else { '首次导入' }
+        Note        = if ($already) { '重导' } else { '首次导入' }
     }
     if (Test-Path -LiteralPath $logFile) {
         $row | ConvertTo-Csv -NoTypeInformation | Select-Object -Skip 1 | Add-Content -LiteralPath $logFile -Encoding UTF8

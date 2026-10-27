@@ -37,6 +37,7 @@ Assert ($zip.Count -eq 1) "zip 生成"
 # 注：PS5.1 Compress-Archive 条目名用反斜杠（如 reports\p95.csv），因此首层段按 / 与 \ 都切
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $z = [System.IO.Compression.ZipFile]::OpenRead($zip[0].FullName)
+$zip1EntryCount = $z.Entries.Count   # 首次导入 zip 的条目数，供 import-log FileCount 断言
 $tops = @($z.Entries | ForEach-Object { $_.FullName.Split(@('/','\'))[0] })
 $z.Dispose()
 foreach ($n in @("master_manifest.csv", "srv01-a1.csv", "reports", "work", "assessment", "cmdlog", "_export-meta.txt")) {
@@ -70,6 +71,7 @@ Assert (Test-Path (Join-Path $imp "_export-meta.txt")) "导入 meta"
 $log = @(Import-Csv (Join-Path $res "imported\import-log.csv"))
 Assert ($log.Count -eq 1 -and $log[0].ZipName -eq $zip[0].Name -and $log[0].MachineName -eq 'srv01' -and $log[0].Note -eq '首次导入') "import-log 首次导入"
 Assert ($log[0].SourceDir -eq $res) "SourceDir=meta 的 ServerResultsDir"
+Assert ([int]$log[0].FileCount -eq $zip1EntryCount) "import-log FileCount=zip 条目数（$zip1EntryCount）"
 # ---- 二次导入同一 zip → 跳过（log 不追加） ----
 & (Join-Path $tmpKit "scripts\Import-ServerResults.ps1") -ZipPath $zipPath.FullName -ImportRoot $res 2>$null | Out-Null
 $log2 = @(Import-Csv (Join-Path $res "imported\import-log.csv"))
