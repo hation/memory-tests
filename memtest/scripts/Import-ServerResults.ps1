@@ -4,7 +4,10 @@
 #
 # 定位：把服务器导出的 <机器名>-results-YYYYMMDD.zip（经 U盘拷到编排机）导入到
 #       <ImportRoot>\imported\<机器名>\。累积式：直接并入、不清理旧内容——
-#       同名文件被新导入覆盖，旧批次独有文件保留。防重复：imported\import-log.csv
+#       同名文件被新导入覆盖，旧批次独有文件保留。zip 内任务清单
+#       （<批次>\任务清单-*.md）解压后并入编排机 results\<批次>\（调
+#       Merge-TaskChecklists 逐行取有状态方；失败仅警告，不影响导入主流程）。
+#       防重复：imported\import-log.csv
 #       已含相同 ZipName 时默认跳过（不追加 log、exit 0）；-Force 允许重导（重新
 #       解压覆盖同名；Note 按是否已导入过判定：已导入记"重导"，首次导入记"首次导入"）。
 #       import-log.csv 字段：
@@ -78,7 +81,7 @@ if ($MachineName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
     exit 1
 }
 
-# 主流程：判重 → Skip 或 解压 → 读 meta 填 SourceDir → 统计文件数 → 追加 import-log → End exit 0
+# 主流程：判重 → Skip 或 解压 → 读 meta 填 SourceDir → 合并任务清单 → 统计文件数 → 追加 import-log → End exit 0
 # 运行期异常由 catch 兜底补写 cmdlog End（FAIL）后 exit 1
 try {
     $importedRoot = Join-Path $ImportRoot 'imported'
@@ -114,6 +117,26 @@ try {
         foreach ($line in Get-Content -LiteralPath $metaFile -Encoding UTF8) {
             if ($line -match '^ServerResultsDir=(.*)$') { $sourceDir = $matches[1].Trim(); break }
         }
+    }
+
+    # 任务清单归集合并（副作用：失败仅 Warning，不影响导入主流程；cmdlog 由既有逻辑负责）。
+    # 清单位于解压目标 <批次>\ 子目录（服务器 results 导出包形态），或直接位于解压目标根
+    # （清单裸打包形态，批次回退为机器名）。调 Merge-TaskChecklists 把服务器清单并入
+    # 编排机 <ImportRoot>\<批次>\（不存在则建），写回编排机 results\<批次>\。
+    try {
+        $checklistFiles = @(Get-ChildItem -LiteralPath $targetDir -Recurse -Filter '任务清单-*.md' -File -ErrorAction SilentlyContinue)
+        if ($checklistFiles.Count -gt 0) {
+            $targetFull = (Get-Item -LiteralPath $targetDir).FullName.TrimEnd('\')
+            foreach ($bd in @($checklistFiles | ForEach-Object { $_.Directory.FullName } | Select-Object -Unique)) {
+                $rel = if ($bd.StartsWith($targetFull + '\', [System.StringComparison]::OrdinalIgnoreCase)) { $bd.Substring($targetFull.Length).TrimStart('\') } else { $MachineName }
+                $batch = if ($rel -eq '') { $MachineName } else { $rel }
+                $orchDir = Join-Path $ImportRoot $batch
+                Merge-TaskChecklists -ServerChecklistDir $bd -OrchestratorChecklistDir $orchDir -MachineName $MachineName | Out-Null
+                Write-Host "任务清单合并: $bd → $orchDir"
+            }
+        }
+    } catch {
+        Write-Host "警告: 任务清单合并失败（不影响导入结果）: $($_.Exception.Message)"
     }
 
     # import-log 追加一行（首次导入 / 重导，按是否已导入过该 ZipName 判定；追加不覆盖）
