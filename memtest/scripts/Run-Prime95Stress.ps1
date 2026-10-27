@@ -97,25 +97,30 @@ if ($existing.Count -gt 0) {
     exit 1
 }
 
-# 预置 prime.txt（OutputJSON=0；模式键留待实机冒烟回填，首版不写）
-[System.IO.File]::WriteAllText((Join-Path $workDir 'prime.txt'), "OutputJSON=0`n", (New-Object System.Text.UTF8Encoding($false)))
+# Prime95 以可执行文件所在目录为基础工作目录（-W 命令行实测无效，见 2026-10 实机冒烟）。
+# 服务器实测：exe 目录无 prime.txt（首次运行）+ `-t` 即自动开始默认 Blend，results.txt 写进 exe 目录。
+# 因此：运行前清空 exe 目录旧运行产物（恢复"首次"自动跑条件）；运行期间轮询 exe 目录 results.txt 判错；
+# 结束后把结果文件归档到批次目录 workDir（合适目录，归集脚本可带走）。
+$prime95Dir = Split-Path -Parent $Prime95Exe
+foreach ($f in @('prime.txt', 'results.txt', 'screen.log', 'local.txt')) {
+    Remove-Item (Join-Path $prime95Dir $f) -Force -ErrorAction SilentlyContinue
+}
 
 # 主流程：启动 → 轮询 → 判定 → 报告 → cmdlog End → exit 0
 # 运行期异常由 catch 兜底补写 cmdlog End（FAIL）后 exit 1（参照 build.ps1 失败路径风格）
 try {
-    # 启动：-t 进入 torture；-W<dir> 指定工作目录（results.txt 写进批次目录）。
-    # PS5.1 的 Start-Process 将 ArgumentList 数组元素按空格拼接，路径含空格时需显式加引号
-    $p = Start-Process -FilePath $Prime95Exe -ArgumentList @("-t", "-W`"$workDir`"") -PassThru -WindowStyle Minimized
+    # 启动：-t 自动开始默认 Blend（无需模式键，2026-10 服务器实测）；不带 -W（实测无效），结果落在 exe 目录
+    $p = Start-Process -FilePath $Prime95Exe -ArgumentList @("-t") -PassThru
     $startTime = Get-Date
-    Write-Host "Prime95 已启动（PID $($p.Id)），目标时长 $Minutes 分钟，模式 $Mode，工作目录 $workDir"
+    Write-Host "Prime95 已启动（PID $($p.Id)），目标时长 $Minutes 分钟，模式 $Mode，结果目录 $prime95Dir"
 
-    # 轮询循环（每 30s）：进程 HasExited 为主 + results.txt 错误扫描 + 时长判定
+    # 轮询循环（每 30s）：进程 HasExited 为主 + exe 目录 results.txt 错误扫描 + 时长判定
     $exitedEarly = $false
     $stats = $null
     do {
         Start-Sleep -Seconds 30
         if ($p.HasExited) { if ((Get-Date) - $startTime -lt [TimeSpan]::FromMinutes($Minutes)) { $exitedEarly = $true; break } }
-        $stats = Get-Prime95LogStats -LogFile (Join-Path $workDir 'results.txt')
+        $stats = Get-Prime95LogStats -LogFile (Join-Path $prime95Dir 'results.txt')
         if ($stats.HasErrors) { break }   # 提前停（错误数见 $stats.ErrorCount）
         # 辅助：results.txt 长时间未写入仅提示（官方 300s 写入间隔，不判死）
         if ($stats.LastWriteTime -and ((Get-Date) - $stats.LastWriteTime).TotalMinutes -gt 10) {
@@ -125,8 +130,12 @@ try {
 
     $endTime = Get-Date
     if (-not $exitedEarly -and $stats -and -not $stats.HasErrors) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    # 先取最终判定数据（exe 目录），再归档（Move 失败不影响判定）
+    $finalStats = if ($exitedEarly) { [PSCustomObject]@{ ErrorCount = 0 } } else { Get-Prime95LogStats -LogFile (Join-Path $prime95Dir 'results.txt') }
+    foreach ($f in @('prime.txt', 'results.txt', 'screen.log')) {
+        Move-Item (Join-Path $prime95Dir $f) (Join-Path $workDir $f) -Force -ErrorAction SilentlyContinue
+    }
     $actualMin = [math]::Round((($endTime - $startTime).TotalMinutes), 2)
-    $finalStats = if ($exitedEarly) { [PSCustomObject]@{ ErrorCount = 0 } } else { Get-Prime95LogStats -LogFile (Join-Path $workDir 'results.txt') }
     $verdict = Get-Prime95Verdict -ActualMinutes $actualMin -TargetMinutes $Minutes -ErrorCount $finalStats.ErrorCount -ExitedEarly $exitedEarly
     Write-Host ("Prime95 结果: 时长=$actualMin 错误=$($finalStats.ErrorCount) 状态=$($verdict.Status) 结论=$($verdict.Conclusion)")
     Export-Prime95Report -BatchName $BatchName -ToolVersion (Get-AppVersion) -StartTime $startTime -EndTime $endTime `
