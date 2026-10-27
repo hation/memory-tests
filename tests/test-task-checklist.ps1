@@ -1,7 +1,8 @@
 ﻿# ============================================================================
 # test-task-checklist.ps1 — 任务清单（批次总览 + 流程清单）黑盒测试
 # 覆盖：New-TaskChecklist（结构/评估标注/评估缺失）、Update-TaskChecklist、
-#       Update-OverviewRow（含非法状态校验）、Merge-TaskChecklists（四场景）。
+#       Update-OverviewRow（含非法状态校验）、Merge-TaskChecklists（四场景）、
+#       薄壳脚本黑盒（New-TaskChecklist.ps1 / Update-TaskChecklist.ps1，临时包根拷贝法）。
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File tests\test-task-checklist.ps1
 # ============================================================================
 $ErrorActionPreference = 'Stop'
@@ -234,6 +235,39 @@ try {
     # 场景④：服务器目录不存在 → 不抛异常，返回编排机目录
     $m4 = Merge-TaskChecklists -ServerChecklistDir (Join-Path $tmp "no-srv-dir") -OrchestratorChecklistDir $orchDir -MachineName "srv01"
     Assert ($m4 -eq $orchDir) "服务器目录缺失静默返回"
+
+    # ============ 7) 薄壳脚本黑盒（临时包根拷贝法，cmdlog 落临时库） ============
+    $src = Split-Path -Parent $PSScriptRoot
+    $shellKit = Join-Path $tmp "shellkit"
+    New-Item -ItemType Directory -Path (Join-Path $shellKit "scripts"), (Join-Path $shellKit "results") -Force | Out-Null
+    foreach ($f in @("New-TaskChecklist.ps1", "Update-TaskChecklist.ps1", "lib_common.ps1")) {
+        Copy-Item (Join-Path $src "scripts\$f") (Join-Path $shellKit "scripts\$f") -Force
+    }
+    $shellNew = Join-Path $shellKit "scripts\New-TaskChecklist.ps1"
+    $shellUpd = Join-Path $shellKit "scripts\Update-TaskChecklist.ps1"
+    # New 薄壳：生成清单（批次 srv01-a1 → results\srv01-a1\）
+    $outN = & powershell -NoProfile -ExecutionPolicy Bypass -File $shellNew -BatchName "srv01-a1" -MachineName "srv01" 2>&1 | Out-String
+    Assert ($LASTEXITCODE -eq 0) "薄壳 New exit 0（实际 $LASTEXITCODE，输出: $outN）"
+    $shellOv = Join-Path $shellKit "results\srv01-a1\任务清单-总览.md"
+    Assert (Test-Path $shellOv) "薄壳 New 生成总览"
+    $shellOvRows = @(Get-OverviewRows $shellOv)
+    Assert ($shellOvRows.Count -eq 17) "薄壳 New 总览 17 行"
+    Assert (Test-Path (Join-Path $shellKit "results\srv01-a1\任务清单-建档.md")) "薄壳 New 生成流程清单"
+    # Update 薄壳：人工更新目检电性一行
+    $outU = & powershell -NoProfile -ExecutionPolicy Bypass -File $shellUpd -BatchName "srv01-a1" -Flow "目检电性" -Key "目检金手指焊点" -Status "✓ 做成" -Result "目检 OK" -Product "无" 2>&1 | Out-String
+    Assert ($LASTEXITCODE -eq 0) "薄壳 Update exit 0（实际 $LASTEXITCODE，输出: $outU）"
+    $mjRows = @(Get-FlowRows (Join-Path $shellKit "results\srv01-a1\任务清单-目检电性.md"))
+    $mj1 = $mjRows | Where-Object { $_.Key -eq '目检金手指焊点' }
+    Assert ($mj1.Status -eq '✓ 做成' -and $mj1.Result -eq '目检 OK') "薄壳 Update 行状态/结果更新"
+    $mj2 = $mjRows | Where-Object { $_.Key -eq '万用表电性' }
+    Assert ($mj2.Status -eq '─ 等待执行') "薄壳 Update 其他行不变"
+    # Update 薄壳：非法 -Status → 报错 exit 1 且行不变
+    $outBad = & powershell -NoProfile -ExecutionPolicy Bypass -File $shellUpd -BatchName "srv01-a1" -Flow "目检电性" -Key "目检金手指焊点" -Status "XYZ" -Result "r" -Product "p" 2>&1 | Out-String
+    Assert ($LASTEXITCODE -eq 1) "薄壳 Update 非法状态 exit 1（实际 $LASTEXITCODE，输出: $outBad）"
+    Assert ($outBad -match "非法状态") "薄壳 Update 非法状态报错（实际输出: $outBad）"
+    $mjRows2 = @(Get-FlowRows (Join-Path $shellKit "results\srv01-a1\任务清单-目检电性.md"))
+    $mj1b = $mjRows2 | Where-Object { $_.Key -eq '目检金手指焊点' }
+    Assert ($mj1b.Status -eq '✓ 做成' -and $mj1b.Result -eq '目检 OK') "薄壳 Update 非法状态后行不变"
 
     Write-Host "test-task-checklist: ALL PASS"
 }
