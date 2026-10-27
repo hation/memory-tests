@@ -1369,9 +1369,45 @@ function Test-ChecklistRowHasState {
     return ($st -ne '' -and $st -notlike '─*')
 }
 
+# 重算总览底部"总结论"行：按文件当前数据行状态列符号计数 ✓/✗/─/⏳/⚠，
+# 保留原行"（备注…）"后缀（若匹配）；无总结论行则追加。UTF-8 无 BOM 写回。
+function Update-ChecklistSummaryLine {
+    param([string]$OverviewPath)
+    if (-not (Test-Path -LiteralPath $OverviewPath)) { return }
+    $content = [System.IO.File]::ReadAllText($OverviewPath, [System.Text.Encoding]::UTF8)
+    $lines = @($content -split "`r?`n")
+    $cnt = @{ '✓' = 0; '✗' = 0; '─' = 0; '⏳' = 0; '⚠' = 0 }
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match "^\| \d+ \|") {
+            $cols = $lines[$i] -split "\|"
+            if ($cols.Count -ge 4) {
+                $st = $cols[3].Trim()
+                if ($st.Length -gt 0) {
+                    $sym = $st.Substring(0, 1)
+                    if ($cnt.ContainsKey($sym)) { $cnt[$sym]++ }
+                }
+            }
+        }
+    }
+    $summaryIdx = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^总结论: ') { $summaryIdx = $i; break }
+    }
+    $note = ''
+    if ($summaryIdx -ge 0) {
+        $mm = [regex]::Match($lines[$summaryIdx], '^总结论: ✓\d+ ✗\d+ ─\d+ ⏳\d+ ⚠\d+(.*)$')
+        if ($mm.Success) { $note = $mm.Groups[1].Value }
+        $lines[$summaryIdx] = "总结论: ✓$($cnt['✓']) ✗$($cnt['✗']) ─$($cnt['─']) ⏳$($cnt['⏳']) ⚠$($cnt['⚠'])$note"
+    } else {
+        $lines += "总结论: ✓$($cnt['✓']) ✗$($cnt['✗']) ─$($cnt['─']) ⏳$($cnt['⏳']) ⚠$($cnt['⚠'])"
+    }
+    [System.IO.File]::WriteAllText($OverviewPath, ($lines -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+}
+
 # 服务器清单并入编排机：流程清单（建档/Prime95 等服务器独有）不存在才复制；
 # 共享清单（总览/混插）逐行取有状态方——服务器有状态→服务器行；服务器 ─ 且编排机有状态→编排机行；
-# 两边均 ─ / 两边均有状态 → 服务器行；服务器没有该行 → 保留编排机行。返回编排机清单目录。
+# 两边均 ─ / 两边均有状态 → 服务器行；服务器没有该行 → 保留编排机行。
+# 总览合并完成后重算底部"总结论"计数行。返回编排机清单目录。
 function Merge-TaskChecklists {
     param(
         [string]$ServerChecklistDir,
@@ -1478,6 +1514,12 @@ function Merge-TaskChecklists {
         }
         [System.IO.File]::WriteAllText($orchFile, ($out -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
     }
+
+    # 3) 重算总览"总结论"行：合并后行状态可能变化（如服务器 ✓ 行并入），
+    #    计数须按合并后实际 17 行状态重算（覆盖"编排机总览缺失→复制服务器文件"分支）
+    $ovFinal = Join-Path $OrchestratorChecklistDir '任务清单-总览.md'
+    if (Test-Path -LiteralPath $ovFinal) { Update-ChecklistSummaryLine -OverviewPath $ovFinal }
+
     return $OrchestratorChecklistDir
 }
 

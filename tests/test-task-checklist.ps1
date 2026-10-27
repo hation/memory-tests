@@ -46,6 +46,19 @@ function Get-FlowRows([string]$Path) {
     }
     return $rows
 }
+# 解析总览底部"总结论"行计数（✓/✗/─/⏳/⚠）；无匹配行返回全 -1
+function Get-SummaryCounts([string]$Path) {
+    $content = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+    foreach ($line in ($content -split "`r?`n")) {
+        if ($line -match '^总结论: ') {
+            $m = [regex]::Match($line, '^总结论: ✓(\d+) ✗(\d+) ─(\d+) ⏳(\d+) ⚠(\d+)')
+            if ($m.Success) {
+                return @{ '✓' = [int]$m.Groups[1].Value; '✗' = [int]$m.Groups[2].Value; '─' = [int]$m.Groups[3].Value; '⏳' = [int]$m.Groups[4].Value; '⚠' = [int]$m.Groups[5].Value }
+            }
+        }
+    }
+    return @{ '✓' = -1; '✗' = -1; '─' = -1; '⏳' = -1; '⚠' = -1 }
+}
 
 # ---- 临时目录 ----
 $tmp = Join-Path $env:TEMP ("tcl-" + [guid]::NewGuid().ToString("N"))
@@ -199,6 +212,19 @@ try {
     Assert ($m15.Result -eq '服务器15') "两边均有状态取服务器侧"
     $m17 = $ovM | Where-Object { $_.Item -eq '17' }
     Assert ($m17.Status -match '^─') "服务器缺行保留编排机行"
+    # 场景⑤（回归，评审 Important）：合并后总览"总结论"行按实际 17 行状态重算，
+    # 不再保持编排机旧计数（服务器 ✓ 行并入后 ✓ 计数必须增加）
+    $sumLine = (@(([System.IO.File]::ReadAllText((Join-Path $orchDir "任务清单-总览.md"), [System.Text.Encoding]::UTF8) -split "`r?`n") | Where-Object { $_ -match '^总结论: ' }))[0]
+    Assert ($null -ne $sumLine -and $sumLine -match '^总结论: ✓') "合并后仍有总结论行（实际: $sumLine）"
+    Assert ($sumLine -match '（备注') "总结论行保留备注后缀"
+    $sum = Get-SummaryCounts (Join-Path $orchDir "任务清单-总览.md")
+    $exp = @{ '✓' = 0; '✗' = 0; '─' = 0; '⏳' = 0; '⚠' = 0 }
+    foreach ($r in $ovM) {
+        $sym = $r.Status.Substring(0, 1)
+        if ($exp.ContainsKey($sym)) { $exp[$sym]++ }
+    }
+    Assert ($sum['✓'] -eq $exp['✓'] -and $sum['✗'] -eq $exp['✗'] -and $sum['─'] -eq $exp['─'] -and $sum['⏳'] -eq $exp['⏳'] -and $sum['⚠'] -eq $exp['⚠']) "合并后总结论计数与 17 行实际状态一致（期望 ✓$($exp['✓']) ✗$($exp['✗']) ─$($exp['─']) ⏳$($exp['⏳']) ⚠$($exp['⚠'])，实际 ✓$($sum['✓']) ✗$($sum['✗']) ─$($sum['─']) ⏳$($sum['⏳']) ⚠$($sum['⚠'])）"
+    Assert (-not ($sum['✓'] -eq 0 -and $sum['─'] -eq 17)) "总结论已重算（不再保持合并前 ✓0 ─17 旧值）"
     # 场景③：混插共享清单逐行取有状态方
     $hx = @(Get-FlowRows (Join-Path $orchDir "任务清单-混插.md"))
     $h1 = $hx | Where-Object { $_.Key -eq 'Memtest 混插组合' }
