@@ -61,6 +61,11 @@ param(
     # 重启循环（批次切换）
     [int]$RestartLoop = 0,
 
+    # 任务进度追踪（副作用，不影响压测行为）
+    [string]$ChecklistBatch = "",        # 验收批次（缺省 = BatchName），用于任务清单归集
+    [ValidateSet("标准", "混插")]
+    [string]$Scenario = "标准",          # 标准压测 | 混插压力（仅影响清单更新，不影响压测）
+
     # ORT 老化模式（时长制）：-MaxMinutes>0 时启用，按时长而非轮数终止
     [int]$MaxMinutes = 0,        # 老化目标时长（分钟，0=关闭 ORT；72h 老化=4320）
     [int]$TempLimitC = 85,       # 老化温度上限（摄氏度，超过判异常）
@@ -112,6 +117,8 @@ Memtest86+ 自动化编排与压测报告汇总工具
   -MonitorEcc     同时监控 WHEA/ECC 事件
   -MonitorTemp    读取 IPMI 温度传感器（仅 SOL 方式）
   -RestartLoop    断电-上电循环次数（仅 SOL 方式，建议从控制机运行）
+  -ChecklistBatch 验收批次（缺省=BatchName），用于任务清单归集
+  -Scenario       标准 | 混插（默认标准；仅影响任务清单更新，不影响压测行为）
   ORT 老化模式（-MaxMinutes>0 启用，时长制终止；仅支持 SOL/Serial，与 -RestartLoop 互斥）：
   -MaxMinutes     老化目标时长（分钟，0=关闭；72h 老化=4320）
   -TempLimitC     老化温度上限（摄氏度，默认 85）
@@ -644,6 +651,29 @@ try {
     Write-Host "（已保留本批次已解析数据；可用 -ParseOnly -LogFile <raw log> 断点续解析）"
 }
 
+# ---- 任务进度追踪（副作用：清单缺失自动建；失败不影响主流程；-Scenario 仅影响清单更新） ----
+try {
+    $clBatch = if ($ChecklistBatch) { $ChecklistBatch } else { $BatchName }
+    $clDir = Join-Path $LogPath $clBatch
+    if (-not (Test-Path -LiteralPath $clDir)) { $clDir = New-TaskChecklist -ChecklistBatch $clBatch -ResultsDir $LogPath }
+    $overview = Join-Path $clDir '任务清单-总览.md'
+    $mtStatus = if ($summary.FinalStatus -eq 'PASS') { '✓ 做成' } else { '✗ 没做成' }
+    # 档位名判定：-TestList 非空 → 快筛档位（1 轮快筛对应清单环节"快筛"），否则全项档位
+    $gearKey = if ($TestList) { if ($MaxPasses -eq 1) { '快筛' } else { "$MaxPasses轮快筛" } } else { "$MaxPasses轮全项" }
+    $gearName = if ($TestList) { if ($MaxPasses -eq 1) { '1轮快筛' } else { "$MaxPasses轮快筛" } } else { "$MaxPasses轮全项" }
+    $mtResult = "档位=$gearName；Passes=$($summary.PassesCompleted) Errors=$($summary.Errors)"
+    $mtProduct = "$BatchName-report.csv"
+    if ($Scenario -eq '标准') {
+        Update-TaskChecklist -ChecklistPath (Join-Path $clDir '任务清单-Memtest.md') -Key $gearKey -Status $mtStatus -Result $mtResult -Product $mtProduct
+        Update-OverviewRow -OverviewPath $overview -ItemNo 3 -Status $mtStatus -Result $mtResult
+    } else {
+        Update-TaskChecklist -ChecklistPath (Join-Path $clDir '任务清单-混插.md') -Key 'Memtest 混插组合' -Status $mtStatus -Result $mtResult -Product $mtProduct
+        Update-OverviewRow -OverviewPath $overview -ItemNo 16 -Status $mtStatus -Result $mtResult
+    }
+} catch {
+    Write-Warning "任务清单更新失败（不影响压测结果）: $($_.Exception.Message)"
+}
+
 # FR-8 断电/重启循环（批次切换；建议从控制机运行）
 if ($RestartLoop -gt 0) {
     if (-not $ConfirmSwitch) {
@@ -651,6 +681,17 @@ if ($RestartLoop -gt 0) {
     } elseif ($BootMethod -eq "SOL") {
         Invoke-PowerCycleLoop -Cycles $RestartLoop -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass `
             -IpmiTool $IpmiTool -LogCsv (Join-Path $reportDir "$BatchName-powercycle.csv")
+        # 任务进度追踪：断电循环完成（副作用；失败不影响主流程）
+        try {
+            $clBatch = if ($ChecklistBatch) { $ChecklistBatch } else { $BatchName }
+            $clDir = Join-Path $LogPath $clBatch
+            if (-not (Test-Path -LiteralPath $clDir)) { $clDir = New-TaskChecklist -ChecklistBatch $clBatch -ResultsDir $LogPath }
+            Update-TaskChecklist -ChecklistPath (Join-Path $clDir '任务清单-断电循环.md') -Key '200 次循环' -Status '✓ 做成' `
+                -Result "$RestartLoop 次循环完成" -Product "$BatchName-powercycle.csv"
+            Update-OverviewRow -OverviewPath (Join-Path $clDir '任务清单-总览.md') -ItemNo 10 -Status '✓ 做成' -Result "$RestartLoop 次循环完成"
+        } catch {
+            Write-Warning "任务清单更新失败（不影响断电循环结果）: $($_.Exception.Message)"
+        }
     } else {
         Write-Warning "断电循环仅支持 SOL 方式（IPMI），当前方式跳过。"
     }

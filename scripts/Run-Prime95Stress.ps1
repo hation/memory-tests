@@ -20,6 +20,7 @@ param(
     [int]$Minutes = 180,
     [ValidateSet("Blend", "Large")]
     [string]$Mode = "Blend",
+    [string]$ChecklistBatch = "",   # 验收批次（缺省 = BatchName），用于任务清单归集
     [string]$LogPath = "",
     [switch]$Help
 )
@@ -41,6 +42,7 @@ Prime95 混插长压自动化工具（无界面无人值守）
   -Prime95Exe     prime95.exe 路径（缺省 <包根>\tools\prime95\prime95.exe）
   -Minutes        目标压测时长（分钟，默认 180；须 > 0，≤0 报错退出）
   -Mode           Blend | Large（默认 Blend）（-Mode 经 prime.txt WorkPreference 键生效：Blend=2 / Large=1，社区编码，实机冒烟确认）
+  -ChecklistBatch 验收批次（缺省=BatchName），用于任务清单归集
   -LogPath        输出目录（默认 <包根>\results\）
   -Help           打印本帮助
 
@@ -155,6 +157,20 @@ try {
     Export-Prime95Report -BatchName $BatchName -ToolVersion (Get-AppVersion) -StartTime $startTime -EndTime $endTime `
         -TargetMinutes $Minutes -ActualMinutes $actualMin -Mode $Mode -ErrorCount $finalStats.ErrorCount `
         -Verdict $verdict -ReportDir $reportDir -LogPath $LogPath
+    # 任务进度追踪（副作用：清单缺失自动建；失败不影响主流程；不更新总览第 5 项）
+    try {
+        $clBatch = if ($ChecklistBatch) { $ChecklistBatch } else { $BatchName }
+        $clDir = Join-Path $LogPath $clBatch
+        if (-not (Test-Path -LiteralPath $clDir)) { $clDir = New-TaskChecklist -ChecklistBatch $clBatch -ResultsDir $LogPath }
+        $p95Status = if ($verdict.Status -eq 'PASS') { '✓ 做成' } else { '✗ 没做成' }
+        $p95Key = if ($Minutes -ge 4320) { '正式长压' } else { '冒烟(首用)' }
+        $p95Result = "时长=$actualMin 分钟 错误=$($finalStats.ErrorCount) 状态=$($verdict.Status)"
+        $p95Product = "$BatchName-prime95-report.csv"
+        Update-TaskChecklist -ChecklistPath (Join-Path $clDir '任务清单-Prime95.md') -Key $p95Key -Status $p95Status -Result $p95Result -Product $p95Product
+        Update-TaskChecklist -ChecklistPath (Join-Path $clDir '任务清单-混插.md') -Key 'Prime95 长压' -Status $p95Status -Result $p95Result -Product $p95Product
+    } catch {
+        Write-Warning "任务清单更新失败（不影响压测结果）: $($_.Exception.Message)"
+    }
     Write-CmdLog -Script 'Run-Prime95Stress' -State End -Result ("Prime95 " + $verdict.Status) -ExitCode 0 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
     exit 0
 } catch {
