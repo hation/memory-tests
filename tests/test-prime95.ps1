@@ -9,6 +9,10 @@ $v = Get-Prime95Verdict -ActualMinutes 185 -TargetMinutes 180 -ErrorCount 2 -Exi
 Assert ($v.Status -eq 'FAIL' -and $v.Conclusion -match '错误') "FAIL 有错误"
 $v = Get-Prime95Verdict -ActualMinutes 90 -TargetMinutes 180 -ErrorCount 0 -ExitedEarly $true
 Assert ($v.Status -eq 'FAIL' -and $v.Conclusion -match '提前退出') "FAIL 提前退出"
+$v = Get-Prime95Verdict -ActualMinutes 185 -TargetMinutes 180 -ErrorCount 0 -ExitedEarly $false -NoLogFile $true
+Assert ($v.Status -eq 'FAIL' -and $v.Conclusion -match '未生成 results.txt') "FAIL 无日志(NoLogFile)"
+$v = Get-Prime95Verdict -ActualMinutes 185 -TargetMinutes 180 -ErrorCount 0 -ExitedEarly $false -NoLogFile $false
+Assert ($v.Status -eq 'PASS') "PASS NoLogFile=false 不破坏既有行为"
 # Get-Prime95LogStats
 $tmp = Join-Path $env:TEMP "p95-stats-sample.txt"
 [System.IO.File]::WriteAllText($tmp, "line1`n[FATAL ERROR] x`nTest 1, run 2, FAILED`n", (New-Object System.Text.UTF8Encoding($false)))

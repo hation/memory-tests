@@ -40,7 +40,7 @@ Prime95 混插长压自动化工具（无界面无人值守）
   -BatchName      批次名（缺省 p95_<时间戳>），用于文件名、工作目录与归集
   -Prime95Exe     prime95.exe 路径（缺省 <包根>\tools\prime95\prime95.exe）
   -Minutes        目标压测时长（分钟，默认 180；须 > 0，≤0 报错退出）
-  -Mode           Blend | Large（默认 Blend）
+  -Mode           Blend | Large（默认 Blend）（-Mode 经 prime.txt WorkPreference 键生效：Blend=2 / Large=1，社区编码，实机冒烟确认）
   -LogPath        输出目录（默认 <包根>\results\）
   -Help           打印本帮助
 
@@ -52,13 +52,14 @@ Prime95 混插长压自动化工具（无界面无人值守）
 说明：
   - 无人值守：启动后最小化运行，默认每 30s 轮询；到点主动 Stop 收尾（正常）；
     未到点进程即退出判 FAIL（提前退出）
+  - 运行结束未生成 results.txt 判 FAIL（Prime95 未实际运行或时长过短未完成首轮）
   - results.txt 出现 FATAL ERROR / Self-test failed / FAILED 立即终止并判 FAIL
   - 判定/报告/合成行由 lib_common.ps1 的 Get-Prime95Verdict / Get-Prime95LogStats /
     Export-Prime95Report 完成（报告 <LogPath>\reports\<批次>-prime95-report.csv +
     master_manifest.csv 合成行）
   - 实机冒烟提示：首次使用建议先 -Minutes 1 跑一遍，确认 prime95 正常启动、
-    results.txt 生成后再跑长压；prime.txt 模式键（CpuStress/MemStress）留待实机
-    冒烟回填，首版仅写 OutputJSON=0
+    results.txt 生成后再跑长压；启动前自动预写 prime.txt（WorkPreference 按 -Mode
+    写入 Blend=2 / Large=1，OutputJSON=0），故首次运行即按所选模式执行 torture
 "@
     exit 0
 }
@@ -106,10 +107,17 @@ foreach ($f in @('prime.txt', 'results.txt', 'screen.log', 'local.txt')) {
     Remove-Item (Join-Path $prime95Dir $f) -Force -ErrorAction SilentlyContinue
 }
 
+# 预写 prime.txt 使 -Mode 生效：WorkPreference 为 torture 类型社区编码
+# （0=Small FFTs / 1=In-place large FFTs / 2=Blend / 3=Custom；官方文档未记载，实机冒烟确认）
+$modeKey = if ($Mode -eq 'Blend') { 2 } elseif ($Mode -eq 'Large') { 1 } else { throw "未知 Mode: $Mode" }
+$primeTxtPath = Join-Path $prime95Dir 'prime.txt'
+[System.IO.File]::WriteAllText($primeTxtPath, "WorkPreference=$modeKey`nOutputJSON=0`n", (New-Object System.Text.UTF8Encoding($false)))
+Write-Host "==> 已预写 $primeTxtPath（WorkPreference=$modeKey 对应 $Mode）"
+
 # 主流程：启动 → 轮询 → 判定 → 报告 → cmdlog End → exit 0
 # 运行期异常由 catch 兜底补写 cmdlog End（FAIL）后 exit 1（参照 build.ps1 失败路径风格）
 try {
-    # 启动：-t 自动开始默认 Blend（无需模式键，2026-10 服务器实测）；不带 -W（实测无效），结果落在 exe 目录
+    # 启动：-t 开始 Torture Test（torture 类型由上方预写 prime.txt 的 WorkPreference 指定）；不带 -W（实测无效），结果落在 exe 目录
     $p = Start-Process -FilePath $Prime95Exe -ArgumentList @("-t") -PassThru
     $startTime = Get-Date
     Write-Host "Prime95 已启动（PID $($p.Id)），目标时长 $Minutes 分钟，模式 $Mode，结果目录 $prime95Dir"
@@ -117,14 +125,19 @@ try {
     # 轮询循环（每 30s）：进程 HasExited 为主 + exe 目录 results.txt 错误扫描 + 时长判定
     $exitedEarly = $false
     $stats = $null
+    $resultsSeen = $false
     do {
         Start-Sleep -Seconds 30
         if ($p.HasExited) { if ((Get-Date) - $startTime -lt [TimeSpan]::FromMinutes($Minutes)) { $exitedEarly = $true; break } }
         $stats = Get-Prime95LogStats -LogFile (Join-Path $prime95Dir 'results.txt')
+        if ($stats.LastWriteTime -or (Test-Path -LiteralPath (Join-Path $prime95Dir 'results.txt'))) { $resultsSeen = $true }
         if ($stats.HasErrors) { break }   # 提前停（错误数见 $stats.ErrorCount）
         # 辅助：results.txt 长时间未写入仅提示（官方 300s 写入间隔，不判死）
         if ($stats.LastWriteTime -and ((Get-Date) - $stats.LastWriteTime).TotalMinutes -gt 10) {
             Write-Host "提示：results.txt 已 10+ 分钟未更新（Prime95 写入间隔约 300s，持续观察）"
+        }
+        if (-not $resultsSeen -and ((Get-Date) - $startTime).TotalMinutes -gt ($Minutes / 2)) {
+            Write-Host "提示：尚未生成 results.txt（Prime95 写入间隔约 300s，首轮大 FFT 未完成属正常；继续观察）"
         }
     } while ((Get-Date) - $startTime -lt [TimeSpan]::FromMinutes($Minutes))
 
@@ -136,8 +149,9 @@ try {
         Move-Item (Join-Path $prime95Dir $f) (Join-Path $workDir $f) -Force -ErrorAction SilentlyContinue
     }
     $actualMin = [math]::Round((($endTime - $startTime).TotalMinutes), 2)
-    $verdict = Get-Prime95Verdict -ActualMinutes $actualMin -TargetMinutes $Minutes -ErrorCount $finalStats.ErrorCount -ExitedEarly $exitedEarly
-    Write-Host ("Prime95 结果: 时长=$actualMin 错误=$($finalStats.ErrorCount) 状态=$($verdict.Status) 结论=$($verdict.Conclusion)")
+    $noLog = (-not $exitedEarly) -and (-not $resultsSeen)
+    $verdict = Get-Prime95Verdict -ActualMinutes $actualMin -TargetMinutes $Minutes -ErrorCount $finalStats.ErrorCount -ExitedEarly $exitedEarly -NoLogFile $noLog
+    Write-Host ("Prime95 结果: 时长=$actualMin 错误=$($finalStats.ErrorCount) 状态=$($verdict.Status) 结论=$($verdict.Conclusion)" + $(if ($noLog) { " [未生成 results.txt]" } else { "" }))
     Export-Prime95Report -BatchName $BatchName -ToolVersion (Get-AppVersion) -StartTime $startTime -EndTime $endTime `
         -TargetMinutes $Minutes -ActualMinutes $actualMin -Mode $Mode -ErrorCount $finalStats.ErrorCount `
         -Verdict $verdict -ReportDir $reportDir -LogPath $LogPath
