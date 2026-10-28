@@ -28,8 +28,8 @@ results/
 # 本地临时工作区（实测输出，不入库）
 tmp/
 
-# 便携 Python（内置工具，不入库）
-memtest/tools/python/
+# 便携 Python（内置工具，已入库：repo 根 tools/python/ 与 kit 镜像 memtest/tools/python/ 同步提交，
+# 保证 clone 后 db 历史库与 ISO 重建零下载；勿再忽略）
 
 # ISO 构建工具（构建机本地下载，不入库；qemu 按需 -DownloadQemu 获取）
 # 注：GRUB 2.06（tools/grub）已随本项目入库（约 3.8MB），保证离线构建 ISO；
