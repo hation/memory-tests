@@ -96,7 +96,7 @@ Memtest86+ 自动化编排与压测报告汇总工具
 参数：
   -BatchName      批次名（缺省按时间戳），用于文件名与归集
   -BootMethod     SOL | Serial | USB | EFI（默认 SOL）
-  SOL 方式（BMC/IPMI，全自动）：
+  SOL 方式（BMC/IPMI，全自动；启动前自动 BMC 前置体检（BMC 可达 + IP 源须静态；异常中止并打印恢复指引））：
   -BmcHost/-BmcUser/-BmcPass   BMC 连接参数
   -IpmiTool       ipmitool 路径（默认 PATH 中 ipmitool）
   Serial 方式（物理串口线直连，完全离线）：
@@ -185,6 +185,31 @@ if ($BatchName -eq "") { $BatchName = "batch_" + (Get-Date -Format "yyyyMMdd_HHm
 if ($IpmiTool -eq "ipmitool") {
     $bundled = Join-Path (Split-Path -Parent $PSScriptRoot) "tools\ipmitool\ipmitool.exe"
     if (Test-Path -LiteralPath $bundled) { $IpmiTool = $bundled }
+}
+
+# SOL 前置体检（fail-closed：BMC 不可达 / IP 源非静态 / lan print 失败均中止并给恢复指引）
+if ($BootMethod -eq 'SOL' -and $BmcHost -and -not $ParseOnly) {
+    $pre = Invoke-BmcPreflight -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass -IpmiTool $IpmiTool
+    if (-not $pre.Reachable) {
+        Write-Host ""
+        Write-Host "[FAIL] BMC 前置体检：BMC 不可达（$($pre.Detail)）"
+        Write-Host "  指引：① 编排机有线网卡 Code 43 先修（docs/21 §3）；② BMC 无 IP 则去被测服务器本机跑 .\scripts\Set-BmcStaticIp.ps1 恢复静态 IP；③ 修复后重跑本命令。"
+        Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result 'FAIL: BMC 前置体检不可达' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+        exit 1
+    }
+    if (-not $pre.LanPrintOk) {
+        Write-Host "[FAIL] BMC 前置体检：无法读取 LAN 配置（IP 源未知，fail-closed）"
+        Write-Host "  指引：到被测服务器本机跑 .\scripts\Set-BmcStaticIp.ps1 -CheckOnly 人工核实 IP 源后重跑。"
+        Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result 'FAIL: BMC 前置体检 lan print 失败' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+        exit 1
+    }
+    if (-not $pre.IpSourceStatic) {
+        Write-Host "[FAIL] BMC 前置体检：IP 源非静态（DHCP/未指定），断电循环后易丢 IP"
+        Write-Host "  指引：到被测服务器本机跑 .\scripts\Set-BmcStaticIp.ps1 恢复静态 IP（默认 10.0.0.10/255.255.255.0），确认后重跑本命令。"
+        Write-CmdLog -Script 'Run-MemtestSuite' -State End -Result 'FAIL: BMC 前置体检 IP 源非静态' -ExitCode 1 -DurationSec ((Get-Date) - $scriptStartTime).TotalSeconds
+        exit 1
+    }
+    Write-Host "[OK] BMC 前置体检通过：IP 源静态"
 }
 
 # ----------------------------------------------------------------------------
@@ -390,6 +415,7 @@ function Invoke-PowerCycleLoop {
         [string]$IpmiTool, [string]$LogCsv
     )
 
+    Write-PowerCycleWarning
     $rows = @()
     for ($i = 1; $i -le $Cycles; $i++) {
         $t = Get-Date
@@ -407,6 +433,14 @@ function Invoke-PowerCycleLoop {
     }
     $rows | Export-Csv -Path $LogCsv -NoTypeInformation -Encoding UTF8
     Write-Host "断电循环记录 -> $LogCsv"
+
+    # 循环后 BMC 复核（只提示不阻断）
+    $post = Invoke-BmcPreflight -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass -IpmiTool $IpmiTool
+    if (-not $post.Reachable) {
+        Write-Warning "断电循环后 BMC 不可达：请到被测服务器本机跑 .\scripts\Set-BmcStaticIp.ps1 恢复（勿配系统网卡 10.0.0.10，那是 BMC 的 IP）。"
+    } elseif (-not $post.IpSourceStatic) {
+        Write-Warning "断电循环后 BMC IP 源非静态：建议 .\scripts\Set-BmcStaticIp.ps1 恢复为静态，防止下次丢 IP。"
+    }
 }
 
 # FR-11 温度监控（可选）：SOL 方式下通过 IPMI 读取温度传感器（含 DIMM 温度），

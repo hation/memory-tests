@@ -77,6 +77,7 @@ $scriptFiles = @(
     'Run-MemtestSuite.ps1',
     'Check-ServerCapabilities.ps1',
     'Run-ServerAssessment.ps1',
+    'Set-BmcStaticIp.ps1',
     'check_env.ps1',
     'Diag-Bmc.ps1',
     'New-MemtestSolIso.ps1',
@@ -196,7 +197,8 @@ $docsList = @(
     '14-术语解释.md',
     '15-BMC排查方案.md',
     '19-测试项执行清单.md',
-    '20-纯命令行压测手册.md'
+    '20-纯命令行压测手册.md',
+    '21-BMC网络与IP恢复方案.md'
 )
 $keyFiles = @(
     (Join-Path $KitDir 'scripts\lib_common.ps1'),
@@ -206,6 +208,7 @@ $keyFiles = @(
     (Join-Path $KitDir 'scripts\New-TaskChecklist.ps1'),
     (Join-Path $KitDir 'scripts\Update-TaskChecklist.ps1'),
     (Join-Path $KitDir 'scripts\Run-Prime95Stress.ps1'),
+    (Join-Path $KitDir 'scripts\Set-BmcStaticIp.ps1'),
     (Join-Path $KitDir 'scripts\Export-ServerResults.ps1'),
     (Join-Path $KitDir 'scripts\Import-ServerResults.ps1')
 )
@@ -215,6 +218,7 @@ foreach ($doc in $docsList) {
 $keyFiles += (Join-Path $KitDir 'boot\memtest.iso')
 $keyFiles += (Join-Path $KitDir 'tools\README-tools.md')
 $keyFiles += (Join-Path $KitDir 'tools\ipmitool\ipmitool.exe')
+$keyFiles += (Join-Path $KitDir 'tools\ipmiutil-win64\ipmiutil.exe')
 $keyFiles += (Join-Path $KitDir 'tools\prime95\prime95.exe')
 $keyFiles += (Join-Path $KitDir 'README.md')
 $keyFiles += (Join-Path $KitDir 'VERSION')

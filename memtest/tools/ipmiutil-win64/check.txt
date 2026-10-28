@@ -1,0 +1,5 @@
+cd /d D:\ipmiutil-win64
+ipmiutil.exe lan -c 1                 :: 先看当前 BMC 网络配置（确认本地接口能用）
+ipmiutil.exe lan -s 1 10.0.0.10 255.255.255.0 0.0.0.0   :: 设 IP/掩码/网关(无网关)
+ipmiutil.exe reset -c                 :: 冷复位 BMC 让配置生效
+ipmiutil.exe lan -c 1                 :: 验证是否写入

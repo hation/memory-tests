@@ -194,6 +194,9 @@ if ($runOob) {
 # ---------------------------------------------------------------------------
 $verifyItem10 = $null
 if ($runOob -and $VerifyPowerCycle) {
+    # 共用电源风险警示（不阻断；-VerifyPowerCycle 开关本身即同意，见 spec §4.6）
+    Write-PowerCycleWarning
+
     # EAP 守卫：顶层 EAP=Stop 会把原生命令 stderr 升级为终止错误，破坏逐调用 {Out;Err;Code}
     # 捕获；验证逻辑内所有 Invoke-IpmiProbe 调用统一临时切 Continue，finally 恢复。
     $prevEap = $ErrorActionPreference
