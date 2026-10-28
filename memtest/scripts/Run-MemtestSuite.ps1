@@ -246,8 +246,16 @@ function Invoke-SolCapture {
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     $done = $false
     $stalled = $false
+    $sessionLost = $false
+    $failHint = ""
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 10
+        # 会话断开早期检测：ipmitool 已退出且未收到 ev=done → 立即结束（不等 deadline）
+        if ($p.HasExited -and -not $done) {
+            $sessionLost = $true
+            $failHint = "SOL 会话断开（ipmitool 已退出）"
+            break
+        }
         if (Test-Path $OutFile) {
             if (Select-String -Path $OutFile -Pattern 'ev=done' -Quiet) { $done = $true; break }
         }
@@ -270,7 +278,25 @@ function Invoke-SolCapture {
     if (-not $done -and -not $stalled) {
         Write-Warning "SOL 捕获超时（$TimeoutMinutes 分钟），未收到 ev=done。"
     }
-    return [PSCustomObject]@{ Done = $done; Stalled = $stalled; CaptureStart = $capStart; CaptureEnd = Get-Date }
+    # 携带底层错误（如 keepalive）到指引
+    if (-not $sessionLost -and (Test-Path "$OutFile.err")) {
+        $errRaw = Get-Content -LiteralPath "$OutFile.err" -Raw -ErrorAction SilentlyContinue
+        if ($errRaw) { $failHint = $errRaw.Trim() }
+    }
+    return [PSCustomObject]@{ Done = $done; Stalled = $stalled; SessionLost = $sessionLost; FailHint = $failHint; CaptureStart = $capStart; CaptureEnd = Get-Date }
+}
+
+# SOL 无输出/会话中断的四查行动指引（文案与 docs/15、docs/20 一致）
+function Write-SolTroubleshootHint {
+    param([string]$FailHint = "")
+    Write-Host ""
+    Write-Host "⚠️ SOL 未收到 Memtest86+ 输出（或会话中断），按序排查："
+    Write-Host "  ① 引导方式：必须是 BMC 虚拟介质挂载 memtest-sol.iso（Ventoy U 盘引导时串口走物理 COM，SOL 收不到）；"
+    Write-Host "  ② BIOS 串口重定向（Console Redirection → SOL）须开启，波特率 115200 三处一致；"
+    Write-Host "  ③ 残留 SOL 会话：sol deactivate 清掉再跑（session already active）；"
+    Write-Host "  ④ BMC 链路：编排机能 ping 通 10.0.0.10；被测服务器本机跑 Set-BmcStaticIp.ps1 -CheckOnly 确认 IP 源静态。"
+    if ($FailHint) { Write-Host ("  底层错误: " + $FailHint) }
+    Write-Host "  参考：docs/15-BMC排查方案.md §3、docs/20 流程 2。"
 }
 
 # Serial 直连串口方式：物理串口线直连服务器 COM 口抓取 MTLOG（完全离线）
@@ -544,6 +570,10 @@ if ($ortMode) {
         if ($BootMethod -eq 'SOL') {
             $cap = Invoke-SolCapture -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass -IpmiTool $IpmiTool `
                 -OutFile $rawLog -TimeoutMinutes ($MaxMinutes + $OrtBufferMin) -MaxStallMin $OrtMaxGapMin
+            if (-not $cap.Done) {
+                Write-Warning ("SOL 捕获未收到 ev=done（Done=$($cap.Done) Stalled=$($cap.Stalled) SessionLost=$($cap.SessionLost)）")
+                Write-SolTroubleshootHint -FailHint $cap.FailHint
+            }
         } else {
             $cap = Invoke-SerialCapture -SerialPortName $SerialPort -BaudRate $BaudRate `
                 -OutFile $rawLog -TimeoutMinutes ($MaxMinutes + $OrtBufferMin) -MaxStallMin $OrtMaxGapMin
@@ -608,7 +638,10 @@ switch ($BootMethod) {
     "SOL" {
         $cap = Invoke-SolCapture -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass `
             -IpmiTool $IpmiTool -OutFile $rawLog -TimeoutMinutes ($MaxPasses * 90 + 30)
-        if (-not $cap.Done) { Write-Warning "SOL 捕获未收到 ev=done（Done=$($cap.Done) Stalled=$($cap.Stalled)）。" }
+        if (-not $cap.Done) {
+            Write-Warning ("SOL 捕获未收到 ev=done（Done=$($cap.Done) Stalled=$($cap.Stalled) SessionLost=$($cap.SessionLost)）")
+            Write-SolTroubleshootHint -FailHint $cap.FailHint
+        }
     }
     "Serial" {
         $cap = Invoke-SerialCapture -SerialPortName $SerialPort -BaudRate $BaudRate `
