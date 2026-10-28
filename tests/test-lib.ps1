@@ -36,4 +36,11 @@ $p = Invoke-IpmiProbe -IpmiTool $fake -IpmiArgs @("mc", "info")
 Assert ($p.Out -contains "probe-out") "Invoke-IpmiProbe captures stdout"
 Assert ($p.Code -eq 0) "Invoke-IpmiProbe captures exit code"
 Remove-Item $fake -Force
+# --- SOL 捕获加固：空日志（SOL 会话头仅此而已）应解析为 INCOMPLETE，不抛异常 ---
+$tmpSol = Join-Path $env:TEMP ("sol-empty-" + [guid]::NewGuid().ToString("N") + ".txt")
+"[SOL Session operational.  Use ~? for help]" | Set-Content -LiteralPath $tmpSol -Encoding UTF8
+$sol = Invoke-MtlogParser -LogFile $tmpSol
+Assert ($sol.FinalStatus -eq "INCOMPLETE") "empty SOL log => INCOMPLETE"
+Assert ($sol.PassesCompleted -eq 0) "empty SOL log => 0 passes"
+Remove-Item $tmpSol -Force
 Write-Host "test-lib: ALL PASS"
