@@ -237,41 +237,71 @@ function Invoke-SolCapture {
     if ($BmcUser) { $args += @("-U", $BmcUser) }
     if ($BmcPass) { $args += @("-P", $BmcPass) }
 
+    # 清残留 SOL 会话（失败忽略；同 Diag-Bmc 释放模式）
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $IpmiTool @($args + @('sol', 'deactivate')) 2>$null | Out-Null } catch {}
+    finally { $ErrorActionPreference = $prevEap }
+
     $capStart = Get-Date
     Write-Host "启动 ipmitool SOL 会话，输出到 $OutFile ..."
-    $p = Start-Process -FilePath $IpmiTool -ArgumentList ($args + @("sol", "activate")) `
-            -RedirectStandardOutput $OutFile -RedirectStandardError "$OutFile.err" -PassThru -WindowStyle Hidden
 
-    # 等待 ev=done 出现（或超时/停滞）
+    # 等待 ev=done 出现（或超时/停滞）；遇 already active（进程已退出且 .err 含该签名）再清一次并重试 activate（最多一次）
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     $done = $false
     $stalled = $false
     $sessionLost = $false
     $failHint = ""
-    while ((Get-Date) -lt $deadline) {
-        Start-Sleep -Seconds 10
-        # 先扫 ev=done 再判进程退出：避免 ev=done 写入与 ipmitool 退出落在同一轮询窗口时误判 SessionLost
-        if (Test-Path $OutFile) {
-            if (Select-String -Path $OutFile -Pattern 'ev=done' -Quiet) { $done = $true; break }
-        }
-        # 会话断开早期检测：ipmitool 已退出且未收到 ev=done → 立即结束（不等 deadline）
-        if ($p.HasExited -and -not $done) {
-            $sessionLost = $true
-            $failHint = "SOL 会话断开（ipmitool 已退出）"
-            break
-        }
-        # 停滞检测：SOL 输出超过 MaxStallMin 分钟无写入 → 疑似会话中断
-        if ($MaxStallMin -gt 0) {
-            $lastWrite = (Get-Item $OutFile -ErrorAction SilentlyContinue).LastWriteTime
-            if ($lastWrite) {
-                $stallMin = ((Get-Date) - $lastWrite).TotalMinutes
-                if ($stallMin -gt $MaxStallMin) {
-                    $stalled = $true
-                    Write-Warning "SOL 输出停滞 $([math]::Round($stallMin, 1)) 分钟，疑似会话中断。"
-                    break
+    $retried = $false
+    while ($true) {
+        # 启动 activate（首次启动与 already active 重试均走此路径；重试时同一 OutFile/.err 覆盖重建）
+        $p = Start-Process -FilePath $IpmiTool -ArgumentList ($args + @("sol", "activate")) `
+                -RedirectStandardOutput $OutFile -RedirectStandardError "$OutFile.err" -PassThru -WindowStyle Hidden
+
+        # 轮询 ev=done / 会话断开 / 停滞
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 10
+            # 先扫 ev=done 再判进程退出：避免 ev=done 写入与 ipmitool 退出落在同一轮询窗口时误判 SessionLost
+            if (Test-Path $OutFile) {
+                if (Select-String -Path $OutFile -Pattern 'ev=done' -Quiet) { $done = $true; break }
+            }
+            # 会话断开早期检测：ipmitool 已退出且未收到 ev=done → 立即结束（不等 deadline）
+            if ($p.HasExited -and -not $done) {
+                $sessionLost = $true
+                $failHint = "SOL 会话断开（ipmitool 已退出）"
+                break
+            }
+            # 停滞检测：SOL 输出超过 MaxStallMin 分钟无写入 → 疑似会话中断
+            if ($MaxStallMin -gt 0) {
+                $lastWrite = (Get-Item $OutFile -ErrorAction SilentlyContinue).LastWriteTime
+                if ($lastWrite) {
+                    $stallMin = ((Get-Date) - $lastWrite).TotalMinutes
+                    if ($stallMin -gt $MaxStallMin) {
+                        $stalled = $true
+                        Write-Warning "SOL 输出停滞 $([math]::Round($stallMin, 1)) 分钟，疑似会话中断。"
+                        break
+                    }
                 }
             }
         }
+
+        # already active 重试一次：进程已退出（sessionLost）且 .err 含 "already active"（BMC 仍占用会话）→ 再清一次并重试 activate
+        if ($sessionLost -and -not $retried) {
+            $errRaw = Get-Content -LiteralPath "$OutFile.err" -Raw -ErrorAction SilentlyContinue
+            if ($errRaw -match 'already active') {
+                $retried = $true
+                # 再次 sol deactivate（静默；失败忽略）
+                $prevEap = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                try { & $IpmiTool @($args + @('sol', 'deactivate')) 2>$null | Out-Null } catch {}
+                finally { $ErrorActionPreference = $prevEap }
+                # 重新 activate（同一 OutFile/.err，重新计时），重置状态后继续轮询
+                $done = $false; $sessionLost = $false; $failHint = ""
+                $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+                continue
+            }
+        }
+        break
     }
 
     # 结束 SOL 会话
@@ -284,6 +314,11 @@ function Invoke-SolCapture {
         $errRaw = Get-Content -LiteralPath "$OutFile.err" -Raw -ErrorAction SilentlyContinue
         if ($errRaw) { $failHint = if ($failHint) { $failHint + "；" + $errRaw.Trim() } else { $errRaw.Trim() } }
     }
+    # 释放 BMC 端 SOL payload（失败忽略）
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $IpmiTool @($args + @('sol', 'deactivate')) 2>$null | Out-Null } catch {}
+    finally { $ErrorActionPreference = $prevEap }
     return [PSCustomObject]@{ Done = $done; Stalled = $stalled; SessionLost = $sessionLost; FailHint = $failHint; CaptureStart = $capStart; CaptureEnd = Get-Date }
 }
 
