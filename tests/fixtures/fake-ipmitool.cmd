@@ -31,6 +31,8 @@ echo %* | findstr /C:"sol deactivate" >nul
 if not errorlevel 1 goto :sol_deactivate
 echo %* | findstr /C:"sol activate" >nul
 if not errorlevel 1 goto :sol_activate
+echo %* | findstr /C:"lan print" >nul
+if not errorlevel 1 goto :lan_print
 
 rem unknown subcommand: no output, exit 0
 exit /b 0
@@ -99,4 +101,16 @@ exit /b 0
 
 :sol_activate
 echo SOL: connected
+exit /b 0
+
+:lan_print
+if "%FAKE_IPMI_MODE%"=="preflight-lanfail" (
+    (echo lan print failed) 1>&2
+    exit /b 1
+)
+if "%FAKE_IPMI_MODE%"=="preflight-dhcp" (
+    echo IP Address Source : DHCP Address
+    exit /b 0
+)
+echo IP Address Source : Static Address
 exit /b 0

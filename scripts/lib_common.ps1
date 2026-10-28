@@ -586,6 +586,86 @@ function Test-BmcRole {
 }
 
 # ----------------------------------------------------------------------------
+# BMC 网络前置体检（Invoke-BmcPreflight）与断电循环警示（Write-PowerCycleWarning）
+# ----------------------------------------------------------------------------
+
+# BMC 前置体检：① 可达性——依次用 base / base+-C 3 / base+-C 17 执行 mc info，
+# 首个成功（Code=0 且有输出）判可达并记生效参数 $cipher；全部失败 → Reachable=false。
+# ② IP 源——用生效参数执行 lan print 1，最多 LanRetry 次重试（间隔 LanRetryIntervalSec 秒）；
+# 成功（Code=0 且有输出）→ LanPrintOk=true，输出行含 'IP Address Source' 且匹配 'Static'
+# （PowerShell -match 默认大小写不敏感）→ IpSourceStatic=true。
+# Detail 取有效输出前 3 行 -join ' | '。返回 @{ Reachable; LanPrintOk; IpSourceStatic; Detail }。
+function Invoke-BmcPreflight {
+    param(
+        [string]$BmcHost,
+        [string]$BmcUser = '',
+        [string]$BmcPass = '',
+        [string]$IpmiTool = 'ipmitool',
+        [int]$LanRetry = 2,
+        [int]$LanRetryIntervalSec = 5
+    )
+
+    $base = @("-I", "lanplus", "-H", $BmcHost)
+    if ($BmcUser -ne "") { $base += @("-U", $BmcUser) }
+    if ($BmcPass -ne "") { $base += @("-P", $BmcPass) }
+
+    # ① 可达性：base / base+-C 3 / base+-C 17 依次试 mc info
+    $attempts = @(
+        @($base),
+        @($base + @('-C', '3')),
+        @($base + @('-C', '17'))
+    )
+    $reachable = $false
+    $cipher = $attempts[$attempts.Count - 1]
+    $detail = ''
+    foreach ($attempt in $attempts) {
+        $r = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs ($attempt + @('mc', 'info'))
+        if ($r.Code -eq 0 -and $r.Out.Count -gt 0) {
+            $reachable = $true
+            $cipher = $attempt
+            $detail = (($r.Out | Select-Object -First 3) -join ' | ')
+            break
+        }
+    }
+    if (-not $reachable) {
+        return [PSCustomObject]@{ Reachable = $false; LanPrintOk = $false; IpSourceStatic = $false; Detail = $detail }
+    }
+
+    # ② IP 源：lan print 1，失败按 LanRetry 重试
+    $lanPrintOk = $false
+    $ipStatic = $false
+    $last = $null
+    for ($i = 0; $i -lt $LanRetry; $i++) {
+        $last = Invoke-IpmiProbe -IpmiTool $IpmiTool -IpmiArgs ($cipher + @('lan', 'print', '1'))
+        if ($last.Code -eq 0 -and $last.Out.Count -gt 0) {
+            $lanPrintOk = $true
+            $detail = (($last.Out | Select-Object -First 3) -join ' | ')
+            foreach ($line in $last.Out) {
+                if ($line -match 'IP Address Source') {
+                    if ($line -match 'Static') { $ipStatic = $true }
+                    break
+                }
+            }
+            break
+        }
+        if ($i -lt ($LanRetry - 1)) { Start-Sleep -Seconds $LanRetryIntervalSec }
+    }
+    if (-not $lanPrintOk) {
+        $src = if ($last.Out.Count -gt 0) { $last.Out } else { $last.Err }
+        $detail = (($src | Select-Object -First 3) -join ' | ')
+    }
+
+    return [PSCustomObject]@{ Reachable = $reachable; LanPrintOk = $lanPrintOk; IpSourceStatic = $ipStatic; Detail = $detail }
+}
+
+# 断电循环风险警示（chassis power cycle 前置提示，2026-10-28 故障根因复盘）
+function Write-PowerCycleWarning {
+    Write-Host "⚠️ 断电循环风险提示"
+    Write-Host "- chassis power cycle 是真断电；若编排机与被测服务器共用同一插线板/PDU，反复断电的电压跌落可能导致编排机网卡 Code 43、被测服务器网卡/BMC 异常（2026-10-28 故障根因）。"
+    Write-Host "- 建议：① 编排机先换独立电源回路；② 开始前先停掉本机正在跑的 SOL/长连接；③ 循环中勿动编排机。"
+}
+
+# ----------------------------------------------------------------------------
 # Memtest SOL 引导菜单预设解析与 grub.cfg 生成
 # ----------------------------------------------------------------------------
 
