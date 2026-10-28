@@ -876,6 +876,15 @@ function Get-IPMITempSensors {
     return $temps
 }
 
+# 动态温度采样间隔（ORT 模式）：按时长分档期望轮数后 clamp(ceil(时长/轮数),1,60)。
+# ≤60 分钟 → 期望 4 轮；>60 分钟 → 期望 12 轮；返回值 ≥1（供 Start-OrTTempSampling 的 IntervalMin -gt 0 判断）。
+function Get-DynamicTempIntervalMin {
+    param([int]$MaxMinutes)
+
+    if ($MaxMinutes -le 60) { $targetSamples = 4 } else { $targetSamples = 12 }
+    return [int][Math]::Max(1, [Math]::Min(60, [Math]::Ceiling($MaxMinutes / $targetSamples)))
+}
+
 # 温度采样后台 Job：dot-source LibPath 后每 IntervalMin 分钟调一次 Get-IPMITempSensors，
 # 长表 Timestamp,Sensor,TempC 追加写 CsvFile。MaxIterations=0 无限循环（生产），>0 为测试钩子。
 function Start-OrTTempSampling {
@@ -884,7 +893,7 @@ function Start-OrTTempSampling {
         [string]$BmcUser,
         [string]$BmcPass,
         [string]$IpmiTool,
-        [int]$IntervalMin = 60,
+        [int]$IntervalMin = 0,
         [string]$CsvFile,
         [string]$LibPath,
         [int]$MaxIterations = 0
