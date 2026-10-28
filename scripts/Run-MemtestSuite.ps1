@@ -250,14 +250,15 @@ function Invoke-SolCapture {
     $failHint = ""
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 10
+        # 先扫 ev=done 再判进程退出：避免 ev=done 写入与 ipmitool 退出落在同一轮询窗口时误判 SessionLost
+        if (Test-Path $OutFile) {
+            if (Select-String -Path $OutFile -Pattern 'ev=done' -Quiet) { $done = $true; break }
+        }
         # 会话断开早期检测：ipmitool 已退出且未收到 ev=done → 立即结束（不等 deadline）
         if ($p.HasExited -and -not $done) {
             $sessionLost = $true
             $failHint = "SOL 会话断开（ipmitool 已退出）"
             break
-        }
-        if (Test-Path $OutFile) {
-            if (Select-String -Path $OutFile -Pattern 'ev=done' -Quiet) { $done = $true; break }
         }
         # 停滞检测：SOL 输出超过 MaxStallMin 分钟无写入 → 疑似会话中断
         if ($MaxStallMin -gt 0) {
@@ -275,13 +276,13 @@ function Invoke-SolCapture {
 
     # 结束 SOL 会话
     try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
-    if (-not $done -and -not $stalled) {
+    if (-not $done -and -not $stalled -and -not $sessionLost) {
         Write-Warning "SOL 捕获超时（$TimeoutMinutes 分钟），未收到 ev=done。"
     }
-    # 携带底层错误（如 keepalive）到指引
-    if (-not $sessionLost -and (Test-Path "$OutFile.err")) {
+    # 携带底层错误（如 keepalive）到指引（会话断开场景同样读取 .err，追加真实错误）
+    if (Test-Path "$OutFile.err") {
         $errRaw = Get-Content -LiteralPath "$OutFile.err" -Raw -ErrorAction SilentlyContinue
-        if ($errRaw) { $failHint = $errRaw.Trim() }
+        if ($errRaw) { $failHint = if ($failHint) { $failHint + "；" + $errRaw.Trim() } else { $errRaw.Trim() } }
     }
     return [PSCustomObject]@{ Done = $done; Stalled = $stalled; SessionLost = $sessionLost; FailHint = $failHint; CaptureStart = $capStart; CaptureEnd = Get-Date }
 }
@@ -570,8 +571,9 @@ if ($ortMode) {
         if ($BootMethod -eq 'SOL') {
             $cap = Invoke-SolCapture -BmcHost $BmcHost -BmcUser $BmcUser -BmcPass $BmcPass -IpmiTool $IpmiTool `
                 -OutFile $rawLog -TimeoutMinutes ($MaxMinutes + $OrtBufferMin) -MaxStallMin $OrtMaxGapMin
-            if (-not $cap.Done) {
-                Write-Warning ("SOL 捕获未收到 ev=done（Done=$($cap.Done) Stalled=$($cap.Stalled) SessionLost=$($cap.SessionLost)）")
+            # ORT 为无限轮（log 参数不带 maxpasses），永不打印 ev=done → 不能以 -not $cap.Done 判定失败，仅按会话断开/停滞判定
+            if ($cap.SessionLost -or $cap.Stalled) {
+                Write-Warning ("SOL 捕获会话断开/停滞（Stalled=$($cap.Stalled) SessionLost=$($cap.SessionLost)）")
                 Write-SolTroubleshootHint -FailHint $cap.FailHint
             }
         } else {
