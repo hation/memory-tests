@@ -193,4 +193,25 @@ try {
 } finally {
     Remove-Item -LiteralPath $tmpDir5 -Recurse -Force
 }
+
+# PART6: Get-DynamicTempIntervalMin 动态采样间隔分档（≤60→4 轮；>60→12 轮；clamp(ceil(时长/轮数),1,60)）
+$dlmCases = @(
+    @{ M = 10;   E = 3 },
+    @{ M = 20;   E = 5 },
+    @{ M = 30;   E = 8 },
+    @{ M = 60;   E = 15 },
+    @{ M = 120;  E = 10 },
+    @{ M = 180;  E = 15 },
+    @{ M = 360;  E = 30 },
+    @{ M = 720;  E = 60 },
+    @{ M = 1440; E = 60 },
+    @{ M = 2160; E = 60 },
+    @{ M = 2880; E = 60 },
+    @{ M = 4320; E = 60 }
+)
+foreach ($c in $dlmCases) {
+    $got = Get-DynamicTempIntervalMin -MaxMinutes $c.M
+    Assert ($got -eq $c.E) "动态间隔 $($c.M)min → $($c.E)（实际 $got）"
+}
+Write-Host "test-ort: PART6 ALL PASS"
 Write-Host "test-ort: ALL PASS"

@@ -69,7 +69,7 @@ param(
     # ORT 老化模式（时长制）：-MaxMinutes>0 时启用，按时长而非轮数终止
     [int]$MaxMinutes = 0,        # 老化目标时长（分钟，0=关闭 ORT；72h 老化=4320）
     [int]$TempLimitC = 85,       # 老化温度上限（摄氏度，超过判异常）
-    [int]$TempIntervalMin = 60,  # 温度/状态采样间隔（分钟）
+    [int]$TempIntervalMin = 0,  # 温度/状态采样间隔（分钟，0=动态自适应；>0 固定）
     [int]$OrtBufferMin = 10,     # ORT 前缓冲（分钟，先跑完整一轮再开始计时）
     [int]$OrtMaxGapMin = 30,     # 最长无进度间隔（分钟，超时判定捕获停滞/日志中断）
 
@@ -122,7 +122,7 @@ Memtest86+ 自动化编排与压测报告汇总工具
   ORT 老化模式（-MaxMinutes>0 启用，时长制终止；仅支持 SOL/Serial，与 -RestartLoop 互斥）：
   -MaxMinutes     老化目标时长（分钟，0=关闭；72h 老化=4320）
   -TempLimitC     老化温度上限（摄氏度，默认 85）
-  -TempIntervalMin 温度/状态采样间隔（分钟，默认 60）
+  -TempIntervalMin 温度/状态采样间隔（分钟，默认 0=动态自适应：≤1h→4轮、2-6h→12轮、12h+→60分钟；>0 显式固定）
   -OrtBufferMin   ORT 前缓冲（分钟，默认 10，先跑完整一轮再计时）
   -OrtMaxGapMin   最长无进度间隔（分钟，默认 30，超时判定捕获停滞/日志中断）
   输出：
@@ -554,7 +554,12 @@ Write-Event -Type stage -Data @{stage='orchestrator'; status='start'; batch=$Bat
 
 $ortMode = ($MaxMinutes -gt 0)
 if ($ortMode) {
-    Write-Host "===== ORT 模式：目标 $MaxMinutes 分钟，温度上限 $TempLimitC°C，采样间隔 $TempIntervalMin 分钟 ====="
+    # 动态采样间隔：0=按时长自适应（≤60→4轮、否则→12轮，clamp 1..60）；>0=显式固定
+    $tempIntervalDynamic = ($TempIntervalMin -le 0)
+    if ($tempIntervalDynamic) { $TempIntervalMin = Get-DynamicTempIntervalMin -MaxMinutes $MaxMinutes }
+    $intervalSuffix = ""
+    if ($tempIntervalDynamic) { $intervalSuffix = "(动态)" }
+    Write-Host "===== ORT 模式：目标 $MaxMinutes 分钟，温度上限 $TempLimitC°C，采样间隔 $TempIntervalMin 分钟$intervalSuffix ====="
     $captureStart = Get-Date
     $tempCsv = Join-Path $reportDir "$BatchName-temp.csv"
     if ($BootMethod -eq 'Serial' -and -not $BmcHost) {
