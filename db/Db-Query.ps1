@@ -1,4 +1,4 @@
-﻿# db/Db-Query.ps1 — SQLite 历史库查询封装（自动用包内 python）
+# db/Db-Query.ps1 — SQLite 历史库查询封装（自动用包内 python）
 # 用法（在离线包根目录运行）: .\db\Db-Query.ps1 [--db history.db] [--serial <SN>] [--batch <name>] [--trend]
 param(
     [switch]$Help,
